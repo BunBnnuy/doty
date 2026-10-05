@@ -17,6 +17,8 @@ export interface DiscordMessageContext {
   messageId: string;
   userId: string;
   isDm: boolean;
+  /** Memory scope: per DM user, or per guild (server). */
+  conversationKey: string;
 }
 
 export interface DiscordBotOptions {
@@ -187,6 +189,9 @@ export function startDiscordBot(options: DiscordBotOptions): DiscordBot {
         messageId: message.messageId,
         userId: message.authorId,
         isDm: message.guildId === undefined,
+        conversationKey: message.guildId === undefined
+          ? `discord:dm:${message.authorId}`
+          : `discord:guild:${message.guildId}`,
       });
       if (reply && reply.trim()) await sendMessage(message.channelId, reply.trim());
     } catch (error) {

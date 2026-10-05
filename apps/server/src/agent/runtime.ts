@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { EventLog } from '../events/log.js';
-import type { ChatProvider } from '../provider/types.js';
+import type { ChatMessage, ChatProvider } from '../provider/types.js';
 import { createDefaultToolRegistry, type ToolRegistry } from '../tools/registry.js';
 import { runAgent, type AgentRunResult } from './loop.js';
 import type { AgentMemory } from '../memory/index.js';
@@ -45,15 +45,17 @@ export class AgentRuntime {
 
   /**
    * Run a task and resolve with its result. Integrations that must await a reply
-   * (e.g. Discord) use this instead of the fire-and-forget `start`.
+   * (e.g. Discord) use this instead of the fire-and-forget `start`. `extra.history`
+   * prepends prior conversation turns so the model remembers them.
    */
-  async run(task: string): Promise<AgentRunResult> {
+  async run(task: string, extra?: { history?: readonly ChatMessage[] }): Promise<AgentRunResult> {
     if (this.#closed) throw new Error('Agent runtime is closed');
     const runId = randomUUID();
     const controller = new AbortController();
     const pending = runAgent({
       ...this.options,
       task,
+      ...(extra?.history?.length ? { history: extra.history } : {}),
       tools: this.#tools,
       log: this.log,
       runId,

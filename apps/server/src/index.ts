@@ -15,6 +15,7 @@ import { OpenAIChatProvider, openAIConfigFromEnv } from './provider/openai.js';
 import { PgEventLog } from './events/pg-log.js';
 import { AgentMemory, OpenAIEmbedder, embeddingConfigFromEnv, memoryStoreFromEnv } from './memory/index.js';
 import { parseAllowedUserIds, startDiscordBot, type DiscordBot } from './integrations/discord.js';
+import { ConversationStore } from './agent/conversation.js';
 
 const PORT = Number.parseInt(process.env.PORT ?? '8787', 10);
 const HOST = process.env.HOST ?? '0.0.0.0';
@@ -50,14 +51,21 @@ async function main(): Promise<void> {
     if (allowed.size === 0) {
       app.log.warn('DISCORD_ALLOWED_USER_IDS is unset: Doty will answer any Discord user');
     }
+    const conversations = new ConversationStore();
+    conversations.hydrate(eventLog);
     discord = startDiscordBot({
       token: discordToken,
       allowedUserIds: allowed,
       ...(process.env.DISCORD_CHANNEL_ID?.trim() ? { channelId: process.env.DISCORD_CHANNEL_ID.trim() } : {}),
       mentionOnly: process.env.DISCORD_MENTION_ONLY !== 'false',
-      handle: async (text) => {
+      handle: async (text, context) => {
         eventLog.append({ type: 'message', data: { text } });
-        const result = await runtime.run(text);
+        const history = conversations.history(context.conversationKey);
+        const result = await runtime.run(text, { history });
+        conversations.record(eventLog, context.conversationKey, { role: 'user', content: text });
+        if (result.answer) {
+          conversations.record(eventLog, context.conversationKey, { role: 'assistant', content: result.answer });
+        }
         return result.answer ?? result.error ?? `No pude completar la tarea (${result.status}).`;
       },
       log: (message) => app.log.info(message),

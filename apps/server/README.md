@@ -125,3 +125,9 @@ The bot ignores other bots, strips its own mention, sends a typing indicator, an
 splits replies over 2000 characters. It uses the built-in `WebSocket` and `fetch`
 — no `discord.js` dependency. Incoming text is appended to the event log as a
 `message` event, so it also appears in the desktop chat.
+
+**Conversation memory.** Doty keeps a bounded window of recent turns per
+conversation — one scope per DM user (`discord:dm:<userId>`) and one per guild
+(`discord:guild:<guildId>`) — and prepends it to the model context, so it
+remembers what was said. Turns are stored as `conversation_turn` events (ignored
+by the desktop chat), so the memory survives restarts without a new table.
