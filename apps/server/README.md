@@ -10,6 +10,13 @@ in your shell (or your existing local dotenv configuration; never commit secrets
 - `DOTY_TOKEN`: bearer token required by `POST /message` and `GET /events`.
 - `DATABASE_URL`: optional Postgres connection string; when set, the server uses
   `PgEventLog` and the existing `events` table for replay and persistence.
+- `DISCORD_BOT_TOKEN`: optional; enables the Discord integration (receive and
+  reply with the agent).
+- `DISCORD_ALLOWED_USER_IDS`: comma-separated Discord user ids allowed to talk to
+  Doty (empty = anyone; the server logs a warning).
+- `DISCORD_CHANNEL_ID`: optional; restrict guild replies to this one channel.
+- `DISCORD_MENTION_ONLY`: set `false` to answer every guild message instead of
+  only messages that mention the bot.
 
 Without `DOTY_TOKEN`, bearer authentication is disabled for local development and
 the server logs a prominent warning. **Do not expose that mode publicly.** When
@@ -99,4 +106,22 @@ It marks them as untrusted reference data. Empty or disabled memory adds no
 context. A failed retrieval emits `memory_unavailable` and lets the task continue;
 cancellation still stops the run. Memory text is not added to that event.
 There is no automatic memory extraction, HTTP memory route, or model memory tool.
-Only explicit `remember` calls store text. Raw harness transcripts must stay local.
+Only explicit `remember` calls store text. Watched-agent reasoning, replies and
+finish notices are shared with the server by explicit product decision (see
+`routes/harness.ts`); secrets are never transmitted.
+
+## Discord integration
+
+With `DISCORD_BOT_TOKEN` set (and a model configured), the server connects to the
+Discord gateway and answers messages:
+
+1. Create a Discord application and bot, and copy its token.
+2. Enable the **MESSAGE CONTENT** privileged intent in the developer portal.
+3. Invite the bot to your server (or just DM it).
+4. Set `DISCORD_BOT_TOKEN` (and optionally `DISCORD_ALLOWED_USER_IDS` /
+   `DISCORD_CHANNEL_ID`) in the server environment, then restart.
+
+The bot ignores other bots, strips its own mention, sends a typing indicator, and
+splits replies over 2000 characters. It uses the built-in `WebSocket` and `fetch`
+— no `discord.js` dependency. Incoming text is appended to the event log as a
+`message` event, so it also appears in the desktop chat.

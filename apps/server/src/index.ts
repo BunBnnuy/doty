@@ -14,6 +14,7 @@ import { buildApp } from './app.js';
 import { OpenAIChatProvider, openAIConfigFromEnv } from './provider/openai.js';
 import { PgEventLog } from './events/pg-log.js';
 import { AgentMemory, OpenAIEmbedder, embeddingConfigFromEnv, memoryStoreFromEnv } from './memory/index.js';
+import { parseAllowedUserIds, startDiscordBot, type DiscordBot } from './integrations/discord.js';
 
 const PORT = Number.parseInt(process.env.PORT ?? '8787', 10);
 const HOST = process.env.HOST ?? '0.0.0.0';
@@ -30,7 +31,7 @@ async function main(): Promise<void> {
   const agent = process.env.OPENAI_MODEL?.trim()
     ? { provider: new OpenAIChatProvider(openAIConfigFromEnv()), ...(memory ? { memory } : {}) }
     : undefined;
-  const { app } = buildApp({
+  const { app, log: eventLog, runtime } = buildApp({
     logger: true,
     ...(pgLog ? { log: pgLog } : {}),
     ...(agent ? { agent } : {}),
@@ -41,8 +42,34 @@ async function main(): Promise<void> {
     app.log.warn('DOTY_TOKEN is unset: API bearer authentication is DISABLED (development only)');
   }
 
+  // Optional Discord integration: receive messages and reply with the agent.
+  let discord: DiscordBot | undefined;
+  const discordToken = process.env.DISCORD_BOT_TOKEN?.trim();
+  if (discordToken && runtime) {
+    const allowed = parseAllowedUserIds(process.env.DISCORD_ALLOWED_USER_IDS);
+    if (allowed.size === 0) {
+      app.log.warn('DISCORD_ALLOWED_USER_IDS is unset: Doty will answer any Discord user');
+    }
+    discord = startDiscordBot({
+      token: discordToken,
+      allowedUserIds: allowed,
+      ...(process.env.DISCORD_CHANNEL_ID?.trim() ? { channelId: process.env.DISCORD_CHANNEL_ID.trim() } : {}),
+      mentionOnly: process.env.DISCORD_MENTION_ONLY !== 'false',
+      handle: async (text) => {
+        eventLog.append({ type: 'message', data: { text } });
+        const result = await runtime.run(text);
+        return result.answer ?? result.error ?? `No pude completar la tarea (${result.status}).`;
+      },
+      log: (message) => app.log.info(message),
+    });
+    app.log.info('Discord integration enabled');
+  } else if (discordToken && !runtime) {
+    app.log.warn('DISCORD_BOT_TOKEN is set but OPENAI_MODEL is missing; Discord is disabled');
+  }
+
   const shutdown = async (signal: string): Promise<void> => {
     app.log.info({ signal }, 'shutting down');
+    discord?.stop();
     await app.close();
     if (pgLog) await pgLog.close();
     if (memoryStore) await memoryStore.close();

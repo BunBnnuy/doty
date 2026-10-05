@@ -30,6 +30,8 @@ export interface BuildAppOptions {
 export interface BuiltApp {
   app: FastifyInstance;
   log: EventLog;
+  /** Present when an agent provider was injected (enables integrations). */
+  runtime?: AgentRuntime;
 }
 
 /** Routes that require the shared bearer token when DOTY_TOKEN is set. */
@@ -63,7 +65,7 @@ export function buildApp(options: BuildAppOptions = {}): BuiltApp {
   registerMessageRoutes(app, log, runtime ? (text) => runtime.start(text) : undefined);
   if (runtime) app.addHook('onClose', async () => runtime.close());
 
-  return { app, log };
+  return { app, log, ...(runtime ? { runtime } : {}) };
 }
 
 /** Hash both values first so timingSafeEqual always receives equal-length buffers. */

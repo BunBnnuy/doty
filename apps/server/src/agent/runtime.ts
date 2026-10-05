@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { EventLog } from '../events/log.js';
 import type { ChatProvider } from '../provider/types.js';
 import { createDefaultToolRegistry, type ToolRegistry } from '../tools/registry.js';
-import { runAgent } from './loop.js';
+import { runAgent, type AgentRunResult } from './loop.js';
 import type { AgentMemory } from '../memory/index.js';
 
 export interface AgentRuntimeOptions {
@@ -41,6 +41,26 @@ export class AgentRuntime {
     }).finally(() => this.#running.delete(controller));
     this.#running.set(controller, pending);
     return runId;
+  }
+
+  /**
+   * Run a task and resolve with its result. Integrations that must await a reply
+   * (e.g. Discord) use this instead of the fire-and-forget `start`.
+   */
+  async run(task: string): Promise<AgentRunResult> {
+    if (this.#closed) throw new Error('Agent runtime is closed');
+    const runId = randomUUID();
+    const controller = new AbortController();
+    const pending = runAgent({
+      ...this.options,
+      task,
+      tools: this.#tools,
+      log: this.log,
+      runId,
+      signal: controller.signal,
+    }).finally(() => this.#running.delete(controller));
+    this.#running.set(controller, pending);
+    return pending;
   }
 
   async close(): Promise<void> {
