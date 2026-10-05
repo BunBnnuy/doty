@@ -12,7 +12,7 @@
  */
 import { mountAvatar } from '@doty/avatar';
 import { createDotStore, startFakeDriver, type Connection, type DotStore } from '@doty/dot-state';
-import { postMessage, resolveToken } from './api.js';
+import { forgetToken, postMessage, rememberToken, resolveToken } from './api.js';
 import { mountChat, type ChatMessage } from './chat.js';
 import { openEventStream, type StreamStatus } from './sse.js';
 import { applyFrame } from './wire.js';
@@ -62,7 +62,7 @@ const harnessOptions = (): HarnessTeamOptions => ({
 
 let avatar = mountAvatar(avatarMount, store, { size: settings.dotySize });
 
-const token = resolveToken();
+let token = resolveToken();
 let serverUrl = settings.serverUrl;
 let fallback = false;
 let stopDriver: (() => void) | undefined;
@@ -368,6 +368,7 @@ const settingsClose = document.getElementById('settings-close');
 const settingsPanel = document.getElementById('settings');
 const chatPanel = document.getElementById('panel');
 const serverField = document.getElementById('setting-server');
+const tokenField = document.getElementById('setting-token');
 const orbitField = document.getElementById('setting-orbit');
 const orbitalField = document.getElementById('setting-orbital');
 const dotyField = document.getElementById('setting-doty');
@@ -423,6 +424,7 @@ function autoCloseLabel(seconds: number): string {
 
 function syncSettingFields(): void {
   if (serverField instanceof HTMLInputElement) serverField.value = settings.serverUrl;
+  if (tokenField instanceof HTMLInputElement) tokenField.value = token ?? '';
   if (orbitField instanceof HTMLInputElement) {
     orbitField.min = String(ORBIT_RANGE.min);
     orbitField.max = String(ORBIT_RANGE.max);
@@ -461,6 +463,19 @@ settingsClose?.addEventListener('click', () => showSettings(false));
 
 serverField?.addEventListener('change', () => {
   if (serverField instanceof HTMLInputElement) applySettings({ ...settings, serverUrl: serverField.value });
+});
+tokenField?.addEventListener('change', () => {
+  if (!(tokenField instanceof HTMLInputElement)) return;
+  const next = tokenField.value.trim();
+  if (next) {
+    rememberToken(next);
+    token = next;
+  } else {
+    forgetToken();
+    token = null;
+  }
+  // Reconnect with the new credentials.
+  stream?.restart();
 });
 orbitField?.addEventListener('input', () => {
   if (orbitField instanceof HTMLInputElement && orbitValue) orbitValue.textContent = orbitField.value;

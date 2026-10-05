@@ -66,11 +66,19 @@ export function resolveToken(): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
-function rememberToken(token: string): void {
+export function rememberToken(token: string): void {
   try {
     localStorage.setItem(TOKEN_STORAGE_KEY, token);
   } catch {
     // Persistence is best-effort; the query token still applies.
+  }
+}
+
+export function forgetToken(): void {
+  try {
+    localStorage.removeItem(TOKEN_STORAGE_KEY);
+  } catch {
+    // Best-effort.
   }
 }
 

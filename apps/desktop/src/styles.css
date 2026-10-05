@@ -603,6 +603,7 @@ button:hover {
   color: var(--muted);
 }
 .setting input[type="url"] { grid-column: 1 / -1; width: 100%; }
+.setting input[type="password"] { grid-column: 1 / -1; width: 100%; }
 .setting input[type="range"] { width: 100%; padding: 0; }
 .setting-checkbox { grid-template-columns: 1fr auto; }
 .setting input[type="checkbox"] { flex: 0 0 auto; width: 16px; min-width: 16px; margin: 0; accent-color: var(--accent); }

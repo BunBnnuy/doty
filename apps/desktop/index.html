@@ -66,8 +66,13 @@
         </header>
         <label class="setting">
           <span>Server URL</span>
-          <input id="setting-server" type="url" spellcheck="false" inputmode="url" placeholder="http://localhost:8787" />
+          <input id="setting-server" type="url" spellcheck="false" inputmode="url" placeholder="https://doty.killbunny.top" />
         </label>
+        <label class="setting">
+          <span>Token</span>
+          <input id="setting-token" type="password" spellcheck="false" autocomplete="off" placeholder="Bearer token (DOTY_TOKEN)" />
+        </label>
+        <p class="settings-note">The deployed server requires its DOTY_TOKEN. It is stored only on this device.</p>
         <label class="setting">
           <span>Orbit radius</span>
           <input id="setting-orbit" type="range" min="110" max="320" step="2" />
