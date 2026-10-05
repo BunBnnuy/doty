@@ -13,6 +13,7 @@ import 'dotenv/config';
 import { buildApp } from './app.js';
 import { OpenAIChatProvider, openAIConfigFromEnv } from './provider/openai.js';
 import { PgEventLog } from './events/pg-log.js';
+import { AgentMemory, OpenAIEmbedder, embeddingConfigFromEnv, memoryStoreFromEnv } from './memory/index.js';
 
 const PORT = Number.parseInt(process.env.PORT ?? '8787', 10);
 const HOST = process.env.HOST ?? '0.0.0.0';
@@ -20,8 +21,14 @@ const HOST = process.env.HOST ?? '0.0.0.0';
 async function main(): Promise<void> {
   const databaseUrl = process.env.DATABASE_URL?.trim();
   const pgLog = databaseUrl ? new PgEventLog(databaseUrl) : undefined;
+  const dotId = process.env.DOTY_DOT_ID?.trim();
+  const memoryStore = databaseUrl && dotId && process.env.OPENAI_EMBED_MODEL?.trim() && process.env.OPENAI_MODEL?.trim()
+    ? memoryStoreFromEnv() : undefined;
+  const memory = memoryStore && dotId ? new AgentMemory({
+    store: memoryStore, dotId, embedder: new OpenAIEmbedder(embeddingConfigFromEnv()),
+  }) : undefined;
   const agent = process.env.OPENAI_MODEL?.trim()
-    ? { provider: new OpenAIChatProvider(openAIConfigFromEnv()) }
+    ? { provider: new OpenAIChatProvider(openAIConfigFromEnv()), ...(memory ? { memory } : {}) }
     : undefined;
   const { app } = buildApp({
     logger: true,
@@ -38,6 +45,7 @@ async function main(): Promise<void> {
     app.log.info({ signal }, 'shutting down');
     await app.close();
     if (pgLog) await pgLog.close();
+    if (memoryStore) await memoryStore.close();
     process.exit(0);
   };
   process.once('SIGINT', () => void shutdown('SIGINT'));

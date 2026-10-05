@@ -3,12 +3,14 @@ import type { EventLog } from '../events/log.js';
 import type { ChatProvider } from '../provider/types.js';
 import { createDefaultToolRegistry, type ToolRegistry } from '../tools/registry.js';
 import { runAgent } from './loop.js';
+import type { AgentMemory } from '../memory/index.js';
 
 export interface AgentRuntimeOptions {
   provider: ChatProvider;
   tools?: ToolRegistry;
   persona?: string;
   maxSteps?: number;
+  memory?: AgentMemory;
 }
 
 /** Process-local runner; durable scheduling/approval resumption are future seams. */

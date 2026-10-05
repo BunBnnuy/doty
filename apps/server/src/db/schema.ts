@@ -14,6 +14,7 @@
 
 import {
   bigserial,
+  customType,
   index,
   integer,
   jsonb,
@@ -36,6 +37,12 @@ export interface DotBudget {
 }
 
 const id = (): ReturnType<typeof uuid> => uuid('id').primaryKey().defaultRandom();
+// Dimension-free pgvector supports different providers. Retrieval checks model and dimensions.
+const embeddingVector = customType<{ data: number[]; driverData: string }>({
+  dataType: () => 'vector',
+  toDriver: (value) => JSON.stringify(value),
+  fromDriver: (value) => JSON.parse(value) as number[],
+});
 
 export const dots = pgTable('dots', {
   id: id(),
@@ -137,8 +144,8 @@ export const memories = pgTable('memories', {
     .references(() => dots.id, { onDelete: 'cascade' }),
   kind: text('kind').notNull().default('fact'),
   content: text('content').notNull(),
-  /** pgvector lands here later; jsonb keeps v1 dependency-free. */
-  embedding: jsonb('embedding').$type<number[]>(),
+  embedding: embeddingVector('embedding'),
+  embeddingModel: text('embedding_model'),
   sourceSessionId: text('source_session_id'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });

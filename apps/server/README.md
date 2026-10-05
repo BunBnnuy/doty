@@ -63,3 +63,40 @@ npm -w @doty/server run typecheck
 
 Runtime tests use a mock provider; provider transport tests use in-memory SSE
 responses; HTTP tool tests mock both DNS and fetch. No live API or database is used.
+
+## Optional long-term memory
+
+The entrypoint enables memory only when `DATABASE_URL`, `OPENAI_MODEL`,
+`OPENAI_EMBED_MODEL`, and `DOTY_DOT_ID` are set. `DOTY_DOT_ID` must identify an
+existing row in `dots`. Apply the migrations in `apps/server/drizzle` first.
+Migration `0001_memory_vector.sql` requires the Postgres pgvector extension.
+The database user must have permission to enable that extension, or an
+administrator must enable it first.
+
+`OPENAI_BASE_URL` and `OPENAI_API_KEY` also configure the fetch-based embeddings
+client. Memory remains disabled when the memory settings are absent. App
+construction does not call the network. Tests inject `InMemoryMemoryStore` and
+`MockEmbedder`; the mock uses deterministic token hashes, not semantic embeddings.
+
+Workers can import these APIs from `src/memory/index.ts`:
+
+```ts
+const memory = new AgentMemory({ store, embedder, dotId, topK: 5 });
+await memory.remember('preference', 'Use short answers.');
+const matches = await memory.retrieve('How should I answer?');
+buildApp({ agent: { provider, memory } });
+```
+
+`MemoryStore.store` accepts dot ID, kind, text, vector, and embedding model.
+`MemoryStore.search` returns top-k matches with cosine similarity. Searches
+exclude other dots, other embedding models, and vectors with different dimensions.
+The pgvector column permits different dimensions; retrieval uses an exact scan.
+Legacy JSON vectors are converted by the migration. Their model remains unset,
+so they must be embedded again before retrieval can use them.
+
+The runtime adds retrieved memories after the persona and before recent history.
+It marks them as untrusted reference data. Empty or disabled memory adds no
+context. A failed retrieval emits `memory_unavailable` and lets the task continue;
+cancellation still stops the run. Memory text is not added to that event.
+There is no automatic memory extraction, HTTP memory route, or model memory tool.
+Only explicit `remember` calls store text. Raw harness transcripts must stay local.
