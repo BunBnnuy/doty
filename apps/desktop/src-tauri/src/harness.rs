@@ -1,11 +1,17 @@
-//! Local metadata-only watcher bridge. Never serialize a HarnessEvent here.
+//! Local watcher bridge.
+//!
+//! Forwards, **over local IPC only**, each session's metadata (`HarnessStatus`)
+//! and its most recent activity lines (`ActivityBatch`). The `text` field is
+//! rendered in the desktop UI; it is never handed to a network transport and no
+//! server sink exists in this crate.
 use doty_harness::{
     time::now_millis, Adapter, CodexAdapter, Harness, HarnessActivity, HarnessEvent,
     HarnessEventKind, HarnessStatus, OpenCodeAdapter, SessionRef, StreamOptions, T3Adapter,
-    TokenTotals,
+    ToolInfo, TokenTotals,
 };
+use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     path::PathBuf,
     sync::{mpsc, Arc, Mutex},
     thread::{self, JoinHandle},
@@ -15,7 +21,58 @@ use tauri::{AppHandle, Emitter, State};
 
 const POLL: Duration = Duration::from_secs(2);
 const STALE_MS: i64 = 120_000;
+const MAX_LINES: usize = 80;
+const MAX_TEXT: usize = 600;
+
 type Statuses = Arc<Mutex<BTreeMap<(Harness, String), HarnessStatus>>>;
+type Activity = Arc<Mutex<BTreeMap<(Harness, String), Vec<ActivityLine>>>>;
+
+/// One recent activity line shown when a session is selected.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivityLine {
+    pub ts: i64,
+    pub kind: HarnessEventKind,
+    /// Tool name only; never the arguments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+    /// LOCAL ONLY. Rendered in the desktop UI, never transmitted off-device.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+
+impl ActivityLine {
+    fn from_event(event: &HarnessEvent) -> Self {
+        let text = event
+            .text
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(|t| {
+                if t.chars().count() > MAX_TEXT {
+                    let mut s: String = t.chars().take(MAX_TEXT).collect();
+                    s.push('…');
+                    s
+                } else {
+                    t.to_string()
+                }
+            });
+        Self {
+            ts: event.ts,
+            kind: event.kind,
+            tool: event.tool.as_ref().map(|t: &ToolInfo| t.name.clone()),
+            text,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivityBatch {
+    pub harness: Harness,
+    pub session_id: String,
+    pub events: Vec<ActivityLine>,
+}
 
 struct Worker {
     stop: mpsc::Sender<()>,
@@ -24,17 +81,20 @@ struct Worker {
 
 pub struct HarnessWatchers {
     statuses: Statuses,
+    activity: Activity,
     workers: Mutex<Vec<Worker>>,
 }
 
 impl HarnessWatchers {
     pub fn start(app: AppHandle) -> Self {
         let statuses = Arc::new(Mutex::new(BTreeMap::new()));
+        let activity = Arc::new(Mutex::new(BTreeMap::new()));
         let workers = [Harness::Codex, Harness::Opencode, Harness::T3]
             .into_iter()
             .map(|harness| {
                 let (stop, receiver) = mpsc::channel();
                 let statuses = statuses.clone();
+                let activity = activity.clone();
                 let app = app.clone();
                 let join = thread::spawn(move || {
                     // Construct adapters on their own thread; no Send contract required.
@@ -61,13 +121,21 @@ impl HarnessWatchers {
                                 // Finite replay passes are cancellable between sessions.
                                 // The frozen Adapter API has no cancellation/cursor handle.
                                 let mut status = None;
+                                let mut lines: VecDeque<ActivityLine> = VecDeque::new();
                                 let result = adapter.stream(
                                     &session,
                                     &StreamOptions {
                                         follow: false,
                                         ..StreamOptions::default()
                                     },
-                                    &mut |event| fold_status(&mut status, event),
+                                    &mut |event| {
+                                        let line = ActivityLine::from_event(&event);
+                                        fold_status(&mut status, event);
+                                        lines.push_back(line);
+                                        while lines.len() > MAX_LINES {
+                                            lines.pop_front();
+                                        }
+                                    },
                                 );
                                 if result.is_ok() {
                                     fingerprints.insert(key, fingerprint);
@@ -75,6 +143,13 @@ impl HarnessWatchers {
                                         mark_stale(&mut status, now_millis());
                                         publish(&app, &statuses, status);
                                     }
+                                    publish_activity(
+                                        &app,
+                                        &activity,
+                                        harness,
+                                        &session.session_id,
+                                        lines.into_iter().collect(),
+                                    );
                                 }
                                 // Do not log adapter errors: their context may contain content.
                             }
@@ -91,6 +166,7 @@ impl HarnessWatchers {
             .collect();
         Self {
             statuses,
+            activity,
             workers: Mutex::new(workers),
         }
     }
@@ -123,6 +199,21 @@ pub fn harness_statuses(watchers: State<'_, HarnessWatchers>) -> Vec<HarnessStat
         .collect()
 }
 
+#[tauri::command]
+pub fn harness_activity(watchers: State<'_, HarnessWatchers>) -> Vec<ActivityBatch> {
+    watchers
+        .activity
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|((harness, session_id), lines)| ActivityBatch {
+            harness: *harness,
+            session_id: session_id.clone(),
+            events: lines.clone(),
+        })
+        .collect()
+}
+
 // Include the WAL: SQLite writes need not touch the main DB's mtime or size.
 fn fingerprint(session: &SessionRef) -> (Option<SystemTime>, u64, Option<(SystemTime, u64)>) {
     let wal = PathBuf::from(format!("{}-wal", session.path.to_string_lossy()));
@@ -133,7 +224,7 @@ fn fingerprint(session: &SessionRef) -> (Option<SystemTime>, u64, Option<(System
 }
 
 fn fold_status(status: &mut Option<HarnessStatus>, event: HarnessEvent) {
-    // Destructure only metadata. text and tool (including args) are dropped here.
+    // Destructure only metadata. tool args are dropped here.
     let HarnessEvent {
         harness,
         session_id,
@@ -198,9 +289,33 @@ fn publish(app: &AppHandle, statuses: &Statuses, status: HarnessStatus) {
     let key = (status.harness, status.session_id.clone());
     if statuses.get(&key) != Some(&status) {
         statuses.insert(key, status.clone());
-        // Only HarnessStatus can enter IPC. There is no server/network sink.
         let _ = app.emit("harness://status", status);
     }
+}
+
+fn publish_activity(
+    app: &AppHandle,
+    activity: &Activity,
+    harness: Harness,
+    session_id: &str,
+    lines: Vec<ActivityLine>,
+) {
+    let key = (harness, session_id.to_string());
+    {
+        let mut map = activity.lock().unwrap();
+        if map.get(&key) == Some(&lines) {
+            return;
+        }
+        map.insert(key, lines.clone());
+    }
+    let _ = app.emit(
+        "harness://activity",
+        ActivityBatch {
+            harness,
+            session_id: session_id.to_string(),
+            events: lines,
+        },
+    );
 }
 
 fn expire(app: &AppHandle, statuses: &Statuses, harness: Harness, now: i64) {
@@ -259,5 +374,20 @@ mod tests {
         status.status = HarnessActivity::WaitingApproval;
         mark_stale(&mut status, 999_999);
         assert_eq!(status.status, HarnessActivity::WaitingApproval);
+    }
+
+    #[test]
+    fn activity_line_keeps_text_but_never_tool_args() {
+        let mut e = event(HarnessEventKind::ToolCall, Some(HarnessActivity::ToolCalling), 100);
+        e.tool = Some(ToolInfo {
+            name: "shell".into(),
+            args: Some(serde_json::json!({ "command": "rm -rf /" })),
+        });
+        let line = ActivityLine::from_event(&e);
+        assert_eq!(line.tool.as_deref(), Some("shell"));
+        assert!(line.text.as_deref().unwrap().contains("PRIVATE TRANSCRIPT"));
+        let json = serde_json::to_string(&line).unwrap();
+        assert!(!json.contains("rm -rf"));
+        assert_eq!(json.contains("\"kind\":\"tool_call\""), true);
     }
 }

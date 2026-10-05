@@ -181,7 +181,8 @@ fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             stub_report,
-            harness::harness_statuses
+            harness::harness_statuses,
+            harness::harness_activity
         ])
         .setup(|app| {
             install_tray(app)?;

@@ -28,6 +28,48 @@ export function readHarnessStatus(value: unknown): HarnessStatus | null {
   };
 }
 
+/** One local activity line for a watched session. */
+export interface ActivityLine {
+  ts: number;
+  kind: string;
+  tool?: string;
+  text?: string;
+}
+
+interface ActivityBatch {
+  harness: Harness;
+  sessionId: string;
+  events: ActivityLine[];
+}
+
+function readActivityLine(value: unknown): ActivityLine | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.ts !== 'number' || !Number.isFinite(record.ts) || typeof record.kind !== 'string') {
+    return null;
+  }
+  return {
+    ts: record.ts,
+    kind: record.kind,
+    ...(typeof record.tool === 'string' ? { tool: record.tool } : {}),
+    ...(typeof record.text === 'string' ? { text: record.text } : {}),
+  };
+}
+
+export function readActivityBatch(value: unknown): ActivityBatch | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (!(HARNESSES as readonly unknown[]).includes(record.harness)
+    || typeof record.sessionId !== 'string' || !record.sessionId
+    || !Array.isArray(record.events)) return null;
+  const events: ActivityLine[] = [];
+  for (const raw of record.events) {
+    const line = readActivityLine(raw);
+    if (line) events.push(line);
+  }
+  return { harness: record.harness as Harness, sessionId: record.sessionId, events };
+}
+
 export function createHarnessStore() {
   const statuses = new Map<string, HarnessStatus>();
   const listeners = new Set<(statuses: readonly HarnessStatus[]) => void>();
@@ -59,15 +101,66 @@ export function createHarnessStore() {
   };
 }
 
+const sessionKey = (harness: Harness, sessionId: string): string => JSON.stringify([harness, sessionId]);
+
 export function mountHarnessTeam(container: HTMLElement): { destroy(): void } {
   const store = createHarnessStore();
   const panel = document.getElementById('harness-details');
   const details = document.getElementById('harness-fields');
+  const activityEl = document.getElementById('harness-activity');
   const summary = document.getElementById('harness-summary');
   const close = document.getElementById('harness-close');
+  const activity = new Map<string, ActivityLine[]>();
   let selected: HarnessStatus | undefined;
   let destroyed = false;
   let unlisten: (() => void) | undefined;
+
+  function ingestActivity(value: unknown): void {
+    const batch = readActivityBatch(value);
+    if (!batch) return;
+    activity.set(sessionKey(batch.harness, batch.sessionId), batch.events);
+    if (selected && selected.harness === batch.harness && selected.sessionId === batch.sessionId) {
+      renderActivity(selected);
+    }
+  }
+
+  function renderActivity(status: HarnessStatus): void {
+    if (!activityEl) return;
+    activityEl.replaceChildren();
+    const lines = activity.get(sessionKey(status.harness, status.sessionId)) ?? [];
+    if (lines.length === 0) {
+      const empty = document.createElement('li');
+      empty.className = 'ha-empty';
+      empty.textContent = 'No activity captured yet…';
+      activityEl.append(empty);
+      return;
+    }
+    for (const line of lines.slice(-60)) {
+      const item = document.createElement('li');
+      const kind = document.createElement('span');
+      kind.className = 'ha-kind';
+      kind.textContent = line.kind.replace(/_/g, ' ');
+      item.append(kind);
+      if (line.tool) {
+        const tool = document.createElement('span');
+        tool.className = 'ha-tool';
+        tool.textContent = line.tool;
+        item.append(tool);
+      }
+      if (line.text) {
+        const text = document.createElement('span');
+        text.className = 'ha-text';
+        text.textContent = line.text;
+        item.append(text);
+      }
+      const time = document.createElement('time');
+      time.className = 'ha-time';
+      time.textContent = new Date(line.ts).toLocaleTimeString();
+      item.append(time);
+      activityEl.append(item);
+    }
+    activityEl.scrollTop = activityEl.scrollHeight;
+  }
 
   function renderDetails(): void {
     if (!selected || !details) return;
@@ -87,6 +180,7 @@ export function mountHarnessTeam(container: HTMLElement): { destroy(): void } {
       description.textContent = value ?? '';
       details.append(term, description);
     }
+    renderActivity(selected);
     if (panel) panel.hidden = false;
   }
 
@@ -119,24 +213,39 @@ export function mountHarnessTeam(container: HTMLElement): { destroy(): void } {
         ]);
         if (destroyed) return;
         // Subscribe first, then hydrate. Buffer updates so a racing snapshot
-        // cannot overwrite a newer status with the same last-activity timestamp.
+        // cannot overwrite newer data with the same last-activity timestamp.
         let hydrating = true;
-        const buffered: unknown[] = [];
-        const stop = await listen<unknown>('harness://status', ({ payload }) => {
+        const bufferedStatus: unknown[] = [];
+        const bufferedActivity: unknown[] = [];
+        const stopStatus = await listen<unknown>('harness://status', ({ payload }) => {
           if (destroyed) return;
-          if (hydrating) buffered.push(payload);
+          if (hydrating) bufferedStatus.push(payload);
           else store.ingest(payload);
         });
-        if (destroyed) { stop(); return; }
-        unlisten = stop;
+        const stopActivity = await listen<unknown>('harness://activity', ({ payload }) => {
+          if (destroyed) return;
+          if (hydrating) bufferedActivity.push(payload);
+          else ingestActivity(payload);
+        });
+        if (destroyed) { stopStatus(); stopActivity(); return; }
+        unlisten = () => { stopStatus(); stopActivity(); };
         try {
-          const snapshot = await invoke<unknown>('harness_statuses');
-          if (!destroyed && Array.isArray(snapshot)) {
-            for (const status of snapshot) store.ingest(status);
+          const [statusSnapshot, activitySnapshot] = await Promise.all([
+            invoke<unknown>('harness_statuses'),
+            invoke<unknown>('harness_activity'),
+          ]);
+          if (!destroyed && Array.isArray(statusSnapshot)) {
+            for (const status of statusSnapshot) store.ingest(status);
+          }
+          if (!destroyed && Array.isArray(activitySnapshot)) {
+            for (const batch of activitySnapshot) ingestActivity(batch);
           }
         } finally {
           hydrating = false;
-          if (!destroyed) for (const payload of buffered) store.ingest(payload);
+          if (!destroyed) {
+            for (const payload of bufferedStatus) store.ingest(payload);
+            for (const batch of bufferedActivity) ingestActivity(batch);
+          }
         }
       } catch {
         // Do not log untrusted payloads or adapter error context.
