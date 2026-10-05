@@ -84,30 +84,29 @@ export function mountChat(options: MountChatOptions): ChatPanel {
     void sendOutgoing(text);
   });
 
-  if (serverForm instanceof HTMLFormElement && serverInput instanceof HTMLInputElement) {
-    serverInput.addEventListener('input', () => {
-      serverInput.setCustomValidity('');
-    });
-
-    serverForm.addEventListener('submit', (event) => {
-      event.preventDefault();
-      const next = normalizeServerUrl(serverInput.value);
-      if (!next) {
-        serverInput.setCustomValidity('Enter an http(s) server URL');
-        serverInput.reportValidity();
-        return;
-      }
-      serverInput.setCustomValidity('');
-      serverInput.value = next;
-      if (next === activeServer) {
-        options.onServerUrl(next);
-        return;
-      }
-      activeServer = next;
-      clear();
-      options.onServerUrl(next);
-    });
+  if (serverInput instanceof HTMLInputElement) {
+    serverInput.addEventListener('input', () => serverInput.setCustomValidity(''));
   }
+
+  serverForm?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (!(serverInput instanceof HTMLInputElement)) return;
+    const next = normalizeServerUrl(serverInput.value);
+    if (!next) {
+      serverInput.setCustomValidity('Enter an http(s) server URL');
+      serverInput.reportValidity();
+      return;
+    }
+    serverInput.setCustomValidity('');
+    serverInput.value = next;
+    if (next === activeServer) {
+      options.onServerUrl(next);
+      return;
+    }
+    activeServer = next;
+    clear();
+    options.onServerUrl(next);
+  });
 
   function renderEmpty(): void {
     const show = items.length === 0;
