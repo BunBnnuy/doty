@@ -9,6 +9,7 @@
     "build": "tauri build"
   },
   "dependencies": {
+    "@doty/avatar": "*",
     "@doty/dot-state": "*",
     "@tauri-apps/api": "^2.12.1"
   }
