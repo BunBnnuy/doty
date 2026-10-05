@@ -54,13 +54,13 @@ const store = createDotStore();
 // --- layout ----------------------------------------------------------------
 
 const header = tag('header');
-header.append(tag('h1', undefined, 'Doty'), tag('p', 'sub', 'Two eyes. One little star. Flat SVG, no assets, no mouth.'));
+header.append(tag('h1', undefined, 'Doty'), tag('p', 'sub', 'Silver twintails. Curled horns. Just two eyes — no mouth, no nose, no assets.'));
 
 const stage = tag('section', 'stage');
 const mount = tag('div', 'mount');
 const caption = tag('div', 'caption');
 const smallMount = tag('div', 'small-mount');
-stage.append(mount, smallMount, tag('p', 'sub', 'Also shown at 48px and 80px'), caption);
+stage.append(mount, smallMount, tag('p', 'sub', 'Flat color, gentle sway · also at 48px and 80px'), caption);
 
 const controls = tag('section', 'controls');
 const layout = tag('div', 'layout');
@@ -221,7 +221,7 @@ reducedToggle.addEventListener('change', remount);
 // Static contact sheet makes every activity/emotion combination inspectable.
 // Clicking one changes only those axes: existing speech and connection survive.
 const poses = tag('section', 'poses');
-poses.append(tag('h2', undefined, 'All 40 static poses'), tag('p', 'sub', 'Click any pose to try it above. Speech and connection stay untouched.'));
+poses.append(tag('h2', undefined, 'All 40 static poses'), tag('p', 'sub', 'Eyes, tilt and blush carry every expression, even without animation. Click to try; speech and connection stay untouched.'));
 const poseGrid = tag('div', 'pose-grid');
 for (const activity of ACTIVITIES) {
   for (const emotion of EMOTIONS) {

@@ -53,11 +53,6 @@ function svgElement<K extends keyof SVGElementTagNameMap>(
   return node;
 }
 
-function hsl(hue: number, saturation: number, lightness: number): string {
-  const h = ((hue % 360) + 360) % 360;
-  return `hsl(${h.toFixed(1)} ${(clamp01(saturation) * 100).toFixed(1)}% ${(clamp01(lightness) * 100).toFixed(1)}%)`;
-}
-
 function prefersReducedMotion(): boolean {
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
   return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -78,37 +73,69 @@ function createRenderer(): Renderer {
   svg.style.overflow = 'hidden';
   svg.setAttribute('aria-hidden', 'true');
 
-  const backdrop = svgElement('rect', { width: 100, height: 100, fill: '#222329' });
+  const backdrop = svgElement('rect', { width: 100, height: 100, fill: '#292929' });
   const scene = svgElement('g', { 'data-part': 'head' });
-  // Broad, uninterrupted color planes; no outlines, lighting or ornament rings.
+  // Mirror broad silhouettes, not dozens of tiny strands: readable even at 48px.
+  const tails = [false, true].map((mirror) => {
+    const side = svgElement('g', { transform: mirror ? 'translate(100 0) scale(-1 1)' : '' });
+    const tail = svgElement('g', { 'data-part': 'twintail' });
+    tail.append(svgElement('path', {
+      fill: '#dedde3',
+      d: 'M 25 26 C 13 22 9 35 11 51 C 13 65 3 71 7 82 C 9 90 18 92 12 95 C 23 97 28 89 23 80 C 17 69 30 66 27 51 C 25 40 30 32 25 26 Z',
+    }), svgElement('path', {
+      fill: '#efedf1',
+      d: 'M 24 28 C 14 35 17 49 17 58 C 17 68 8 73 12 83 C 15 89 20 91 17 94 C 26 90 21 83 20 79 C 16 68 28 64 24 51 C 21 41 28 31 24 28 Z',
+    }));
+    side.append(tail);
+    scene.append(side);
+    return tail;
+  });
   const hairBack = svgElement('path', {
-    'data-part': 'hair-back',
-    d: 'M 8 48 C 8 16 20 7 49 7 C 78 7 92 17 92 48 L 92 72 Q 91 94 69 94 L 30 94 Q 8 94 8 73 Z',
+    'data-part': 'hair-back', fill: '#dedde3',
+    d: 'M 23 46 C 22 27 33 17 50 17 C 68 17 79 29 77 48 L 76 64 Q 74 74 66 78 L 34 78 Q 23 72 23 60 Z',
   });
   const skin = svgElement('path', {
-    fill: '#fae4e2', 'data-part': 'face',
-    d: 'M 20 42 Q 21 22 49 22 Q 79 22 81 44 L 80 65 C 79 83 66 92 50 92 C 32 92 20 81 19 65 Z',
+    fill: '#f8f1e9', 'data-part': 'face',
+    d: 'M 29 42 Q 29 28 50 28 Q 71 28 71 42 L 71 55 C 71 69 62 76 50 76 C 38 76 29 68 29 55 Z',
   });
-  const blush = [31, 70].map((cx) => svgElement('ellipse', {
-    'data-part': 'blush', cx, cy: 70, rx: 7, ry: 4, fill: '#eab4c2',
+  const blush = [35, 65].map((cx) => svgElement('ellipse', {
+    'data-part': 'blush', cx, cy: 62, rx: 4.7, ry: 2.9, fill: '#f3bfc6',
   }));
   // Each eye is ONE round-capped solid black shape, including during a squint.
-  const eyes = [38, 62].map(() => svgElement('path', {
+  const eyes = [41, 59].map(() => svgElement('path', {
     'data-part': 'eye', fill: 'none', stroke: '#000000', 'stroke-linecap': 'round',
   }));
-  const hairUnder = svgElement('path', {
-    'data-part': 'hair-lavender',
-    d: 'M 49 8 C 33 7 27 21 25 33 Q 41 32 62 25 C 63 44 69 69 85 70 Q 91 70 94 63 C 84 67 76 52 73 32 Q 72 11 49 8 Z M 9 60 Q 13 78 25 88 L 30 94 Q 10 94 8 74 Z',
+  const fringe = svgElement('g', { 'data-part': 'hair-front' });
+  fringe.append(svgElement('path', {
+    fill: '#efedf1',
+    d: 'M 50 18 C 33 16 24 29 25 47 C 25 58 28 64 33 65 C 28 60 30 53 31 47 C 38 43 42 35 44 30 C 43 42 47 50 54 52 C 51 47 54 40 54 33 C 58 41 64 47 70 49 C 71 58 69 62 66 65 C 75 62 77 51 75 40 C 73 25 63 17 50 18 Z',
+  }), svgElement('path', {
+    fill: '#d1cfd8',
+    d: 'M 49 22 C 43 31 44 43 51 48 C 46 39 50 32 49 22 Z',
+  }));
+  const ahoge = svgElement('path', {
+    'data-part': 'ahoge', fill: '#efedf1',
+    d: 'M 49 21 C 54 12 53 6 47 7 C 39 8 36 14 37 19 C 34 12 39 5 46 4 C 58 2 60 15 49 21 Z',
   });
-  const hairPink = svgElement('path', {
-    'data-part': 'hair-pink',
-    d: 'M 49 7 C 27 6 12 16 9 35 C 5 52 10 65 23 70 Q 28 72 26 68 C 19 55 20 37 27 27 C 31 17 38 11 49 7 Z M 62 8 C 87 8 92 26 92 46 L 92 69 Q 92 91 69 94 L 69 88 C 84 80 85 65 83 56 C 71 53 67 32 62 8 Z',
+  scene.append(hairBack, skin, ...blush, ...eyes, fringe, ahoge);
+  const horns = [false, true].map((mirror) => {
+    const side = svgElement('g', { transform: mirror ? 'translate(100 0) scale(-1 1)' : '' });
+    const bow = svgElement('path', {
+      'data-part': 'bow', fill: '#19191d',
+      d: 'M 24 30 Q 18 26 18 32 L 18 36 Q 20 37 24 34 Q 28 38 30 36 L 29 31 Q 28 28 24 30 Z M 23 33 L 19 41 L 23 40 L 25 34 L 27 41 L 30 39 L 26 33 Z',
+    });
+    const horn = svgElement('g', { 'data-part': 'horn' });
+    horn.append(svgElement('path', {
+      fill: '#fbf7f3',
+      d: 'M 24 31 C 16 31 17 23 21 20 C 25 17 25 14 24 10 C 30 14 32 23 27 25 C 25 26 23 25 22 24 C 21 28 26 28 28 26 C 29 29 27 31 24 31 Z',
+    }), svgElement('path', {
+      'data-part': 'horn-tip', fill: '#f3d2d6',
+      d: 'M 24 12 C 28 16 29 21 27 23 C 27 19 25 18 24 12 Z',
+    }));
+    side.append(bow, horn);
+    scene.append(side);
+    return horn;
   });
-  const star = svgElement('path', {
-    'data-part': 'star-clip', fill: '#ddd0ec',
-    d: 'M 26 25 Q 27 24 28 26 L 31 31 L 37 32 Q 39 32 37 34 L 33 38 L 34 44 Q 34 46 32 45 L 26 42 L 21 45 Q 19 46 20 43 L 20 37 L 16 33 Q 15 31 18 31 L 23 30 Z',
-  });
-  scene.append(hairBack, skin, ...blush, ...eyes, hairUnder, hairPink, star);
   svg.append(backdrop, scene);
 
   // Monotonic animation clock + phase accumulators. These are never reset on
@@ -130,11 +157,6 @@ function createRenderer(): Renderer {
     }
     const still = reduced ? 0 : 1;
 
-    const hueShift = (a.hue - 340) * 0.12 + e.hueShift * 0.15;
-    hairBack.setAttribute('fill', hsl(340 + hueShift, 0.52 * e.saturationMul, 0.81));
-    hairPink.setAttribute('fill', hsl(340 + hueShift, 0.52 * e.saturationMul, 0.81));
-    hairUnder.setAttribute('fill', hsl(305 + hueShift, 0.25 * e.saturationMul, 0.69));
-
     // Connection degradation: desaturate + dim the whole scene.
     const desat = clamp01(c.desaturate);
     scene.style.filter = desat > 0 ? `saturate(${clamp01(1 - desat * 0.9)})` : '';
@@ -153,6 +175,13 @@ function createRenderer(): Renderer {
     const tilt = -a.lookY * 7 + e.brow * 7;
     scene.setAttribute('transform', `translate(50 ${(50 + bobY).toFixed(3)}) rotate(${tilt.toFixed(3)}) scale(${sx.toFixed(4)} ${sy.toFixed(4)}) translate(-50 -50)`);
 
+    // Separate secondary motion, with a deterministic resting pose when reduced.
+    const sway = still * Math.sin(elapsed * 1.8) * (0.5 + a.glow * 0.8 + s.ripple * 0.4);
+    tails.forEach((tail, i) => tail.setAttribute('transform', `rotate(${(sway * (i === 0 ? 1 : -1)).toFixed(3)} 24 30)`));
+    horns.forEach((horn, i) => horn.setAttribute('transform', `rotate(${(sway * 0.3 * (i === 0 ? 1 : -1)).toFixed(3)} 24 29)`));
+    fringe.setAttribute('transform', `rotate(${(sway * 0.18).toFixed(3)} 50 22)`);
+    ahoge.setAttribute('transform', `rotate(${(sway * 1.2).toFixed(3)} 49 21)`);
+
     // Legacy speech field names are preserved for type compatibility, but drive
     // eye squint/width only. There is deliberately no mouth or nose in this SVG.
     const openness = clamp(a.eyeOpen + e.eyeOpen - s.mouthOpen * 0.4 - s.ripple * 0.18, 0.08, 1.45)
@@ -161,14 +190,15 @@ function createRenderer(): Renderer {
     const gazeY = (a.lookY + e.lookY) * 4;
     const gazeX = a.spinner * 3 + e.brow * 1.5
       + still * a.spinner * Math.sin(elapsed * 0.8) * 0.7;
+    // A happy squint arches upward; concern bends the same two shapes down.
     const curvature = squint * (e.smile < -0.2 ? 3 : -5) - e.smile * 0.8;
     eyes.forEach((eye, i) => {
-      const cx = (i === 0 ? 38 : 62) + gazeX;
-      const cy = 58 - gazeY;
-      const halfX = squint * (5 + s.mouthWide);
-      const halfY = 5.5 * openness * (1 - squint);
+      const cx = (i === 0 ? 41 : 59) + gazeX;
+      const cy = 55 - gazeY;
+      const halfX = squint * (3.7 + s.mouthWide);
+      const halfY = 3 * openness * (1 - squint);
       eye.setAttribute('d', `M ${(cx - halfX).toFixed(3)} ${(cy - halfY).toFixed(3)} Q ${cx.toFixed(3)} ${(cy + curvature).toFixed(3)} ${(cx + halfX).toFixed(3)} ${(cy + halfY).toFixed(3)}`);
-      eye.setAttribute('stroke-width', (7 - squint * 3.2).toFixed(3));
+      eye.setAttribute('stroke-width', (3.8 - squint * 1.8).toFixed(3));
     });
     for (const cheek of blush) cheek.setAttribute('opacity', String(clamp01(0.48 + e.blush * 0.4 + s.ripple * 0.08)));
   }

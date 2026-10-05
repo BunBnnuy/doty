@@ -8,7 +8,7 @@
  * The mapping is split into four INDEPENDENT channels:
  *
  *   activity   — head pose, eye openness/gaze, gentle motion (activity + progress)
- *   emotion    — eye curvature, head tilt, blush and subtle hair tint (emotion)
+ *   emotion    — eye curvature, head tilt and blush (emotion)
  *   speech     — eye squint/width and tiny head emphasis (speech)
  *   connection — opacity / desaturation (connection)
  *
@@ -18,7 +18,7 @@
  * axes stay independent all the way through a transition.
  *
  * Exported numeric records retain their original fields for compatibility.
- * Legacy ornament fields are zero/unused; `spinner` now supplies thinking's
+ * Legacy color/ornament fields are retained/unused; `spinner` supplies thinking's
  * sideways gaze. Speech's legacy `mouth*` fields drive eyes, never a mouth.
  */
 
@@ -68,7 +68,7 @@ export interface ActivityVisual {
   bobPeriod: number;
    /** Gentle head pulse strength, 0..1 (legacy field name). */
   glow: number;
-   /** Pastel hair hue reference in degrees. */
+   /** Legacy hue reference; silver-white hair stays constant. */
   hue: number;
   /** Body saturation, 0..1. */
   saturation: number;
@@ -95,7 +95,7 @@ export interface ActivityVisual {
 }
 
 /**
- * Base pose per activity. Motion is tiny and color stays pastel; the static
+ * Base pose per activity. Motion is tiny and color stays silver-white; the static
  * head pose and eye silhouette carry the meaning even with motion disabled.
  */
 const ACTIVITY_VISUALS: Record<Activity, ActivityVisual> = {

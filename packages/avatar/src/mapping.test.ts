@@ -32,6 +32,19 @@ describe('channel derivations', () => {
     expect(new Set(faces).size).toBe(EMOTIONS.length);
   });
 
+  it('carries activity meaning in eyes and pose rather than ornaments', () => {
+    expect(activityVisual('thinking').lookY).toBeGreaterThan(0);
+    expect(activityVisual('thinking').spinner).toBeGreaterThan(0);
+    expect(activityVisual('waiting_approval').eyeOpen).toBeGreaterThan(activityVisual('idle').eyeOpen);
+    expect(activityVisual('done').eyeOpen).toBeLessThan(activityVisual('idle').eyeOpen);
+    expect(activityVisual('error').eyeOpen).toBeLessThan(activityVisual('idle').eyeOpen);
+    expect(activityVisual('working').glow).toBeGreaterThan(activityVisual('idle').glow);
+    for (const activity of ACTIVITIES) {
+      const pose = activityVisual(activity);
+      expect([pose.aura, pose.progressRing, pose.orbit]).toEqual([0, 0, 0]);
+    }
+  });
+
   it('uses progress only while working, clamped to 0..1', () => {
     expect(activityVisual('working', 0.42).progress).toBeCloseTo(0.42, 10);
     expect(activityVisual('working', 2).progress).toBe(1);
