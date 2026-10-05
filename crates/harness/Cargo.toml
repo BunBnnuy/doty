@@ -7,6 +7,10 @@ edition.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
+# Live file tailing for the Codex JSONL rollouts.
+notify = "8"
+# CLI for the `doty-watch` binary.
+clap = { version = "4", features = ["derive"] }
 
 [[bin]]
 name = "doty-watch"
