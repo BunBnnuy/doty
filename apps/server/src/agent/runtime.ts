@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import type { EventLog } from '../events/log.js';
-import type { ChatMessage, ChatProvider } from '../provider/types.js';
+import type { ChatProvider } from '../provider/types.js';
 import { createDefaultToolRegistry, type ToolRegistry } from '../tools/registry.js';
 import { runAgent, type AgentRunResult } from './loop.js';
+import type { AgentRunner } from './runner.js';
 import type { AgentMemory } from '../memory/index.js';
 
 export interface AgentRuntimeOptions {
@@ -14,7 +15,7 @@ export interface AgentRuntimeOptions {
 }
 
 /** Process-local runner; durable scheduling/approval resumption are future seams. */
-export class AgentRuntime {
+export class AgentRuntime implements AgentRunner {
   readonly #tools: ToolRegistry;
   readonly #running = new Map<AbortController, Promise<unknown>>();
   #closed = false;
@@ -44,18 +45,16 @@ export class AgentRuntime {
   }
 
   /**
-   * Run a task and resolve with its result. Integrations that must await a reply
-   * (e.g. Discord) use this instead of the fire-and-forget `start`. `extra.history`
-   * prepends prior conversation turns so the model remembers them.
+   * Run a task and resolve with its result. `conversationKey` is ignored here
+   * (the in-process loop is stateless); the OpenCode backend uses it.
    */
-  async run(task: string, extra?: { history?: readonly ChatMessage[] }): Promise<AgentRunResult> {
+  async run(task: string, _conversationKey?: string): Promise<AgentRunResult> {
     if (this.#closed) throw new Error('Agent runtime is closed');
     const runId = randomUUID();
     const controller = new AbortController();
     const pending = runAgent({
       ...this.options,
       task,
-      ...(extra?.history?.length ? { history: extra.history } : {}),
       tools: this.#tools,
       log: this.log,
       runId,

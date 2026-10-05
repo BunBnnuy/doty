@@ -2,8 +2,11 @@
  * @doty/server — the online brain (API + worker).
  *
  * Fastify API with `/health`, replayable `/events` SSE, and a validated
- * `POST /message`. Set OPENAI_MODEL to enable the tool-calling agent runtime.
- * No Postgres is required to run this.
+ * `POST /message`.
+ *
+ * Agent backend: when `OPENCODE_SERVER_URL` is set, runs are delegated to a
+ * local OpenCode CLI server (which owns the conversation history); otherwise the
+ * in-process OpenAI-compatible loop is used. No Postgres is required to run this.
  *
  * Run: `npm -w @doty/server run dev`
  */
@@ -11,11 +14,15 @@
 import { pathToFileURL } from 'node:url';
 import 'dotenv/config';
 import { buildApp } from './app.js';
+import { InMemoryEventLog } from './events/log.js';
 import { OpenAIChatProvider, openAIConfigFromEnv } from './provider/openai.js';
 import { PgEventLog } from './events/pg-log.js';
 import { AgentMemory, OpenAIEmbedder, embeddingConfigFromEnv, memoryStoreFromEnv } from './memory/index.js';
 import { parseAllowedUserIds, startDiscordBot, type DiscordBot } from './integrations/discord.js';
-import { ConversationStore } from './agent/conversation.js';
+import { OpenCodeClient, parseOpenCodeModel } from './integrations/opencode.js';
+import { OpenCodeAgent } from './agent/opencode-agent.js';
+import { SessionStore } from './agent/sessions.js';
+import type { AgentRunner } from './agent/runner.js';
 
 const PORT = Number.parseInt(process.env.PORT ?? '8787', 10);
 const HOST = process.env.HOST ?? '0.0.0.0';
@@ -23,25 +30,50 @@ const HOST = process.env.HOST ?? '0.0.0.0';
 async function main(): Promise<void> {
   const databaseUrl = process.env.DATABASE_URL?.trim();
   const pgLog = databaseUrl ? new PgEventLog(databaseUrl) : undefined;
+  const eventLog = pgLog ?? new InMemoryEventLog();
+  if (pgLog) await pgLog.ready;
+
+  // Agent backend: the OpenCode CLI server when configured, else the in-process
+  // OpenAI-compatible loop.
+  const opencodeUrl = process.env.OPENCODE_SERVER_URL?.trim();
+  let runner: AgentRunner | undefined;
+  if (opencodeUrl) {
+    const { providerID, modelID } = parseOpenCodeModel(
+      process.env.OPENCODE_MODEL?.trim() || 'opencode-go/deepseek-v4.1-flash',
+    );
+    const client = new OpenCodeClient({
+      baseUrl: opencodeUrl,
+      providerID,
+      modelID,
+      ...(process.env.OPENCODE_AGENT?.trim() ? { agent: process.env.OPENCODE_AGENT.trim() } : {}),
+    });
+    const sessions = new SessionStore();
+    sessions.hydrate(eventLog);
+    runner = new OpenCodeAgent(client, eventLog, sessions);
+  }
+
   const dotId = process.env.DOTY_DOT_ID?.trim();
-  const memoryStore = databaseUrl && dotId && process.env.OPENAI_EMBED_MODEL?.trim() && process.env.OPENAI_MODEL?.trim()
+  const memoryStore = !runner && databaseUrl && dotId
+    && process.env.OPENAI_EMBED_MODEL?.trim() && process.env.OPENAI_MODEL?.trim()
     ? memoryStoreFromEnv() : undefined;
   const memory = memoryStore && dotId ? new AgentMemory({
     store: memoryStore, dotId, embedder: new OpenAIEmbedder(embeddingConfigFromEnv()),
   }) : undefined;
-  const agent = process.env.OPENAI_MODEL?.trim()
+  const agent = !runner && process.env.OPENAI_MODEL?.trim()
     ? { provider: new OpenAIChatProvider(openAIConfigFromEnv()), ...(memory ? { memory } : {}) }
     : undefined;
-  const { app, log: eventLog, runtime } = buildApp({
+
+  const { app, runtime } = buildApp({
     logger: true,
-    ...(pgLog ? { log: pgLog } : {}),
+    log: eventLog,
+    ...(runner ? { runner } : {}),
     ...(agent ? { agent } : {}),
   });
 
-  if (pgLog) await pgLog.ready;
   if (!process.env.DOTY_TOKEN?.trim()) {
     app.log.warn('DOTY_TOKEN is unset: API bearer authentication is DISABLED (development only)');
   }
+  app.log.info(runner ? 'agent backend: opencode' : agent ? 'agent backend: openai' : 'agent backend: none');
 
   // Optional Discord integration: receive messages and reply with the agent.
   let discord: DiscordBot | undefined;
@@ -51,8 +83,6 @@ async function main(): Promise<void> {
     if (allowed.size === 0) {
       app.log.warn('DISCORD_ALLOWED_USER_IDS is unset: Doty will answer any Discord user');
     }
-    const conversations = new ConversationStore();
-    conversations.hydrate(eventLog);
     discord = startDiscordBot({
       token: discordToken,
       allowedUserIds: allowed,
@@ -60,19 +90,14 @@ async function main(): Promise<void> {
       mentionOnly: process.env.DISCORD_MENTION_ONLY !== 'false',
       handle: async (text, context) => {
         eventLog.append({ type: 'message', data: { text } });
-        const history = conversations.history(context.conversationKey);
-        const result = await runtime.run(text, { history });
-        conversations.record(eventLog, context.conversationKey, { role: 'user', content: text });
-        if (result.answer) {
-          conversations.record(eventLog, context.conversationKey, { role: 'assistant', content: result.answer });
-        }
+        const result = await runtime.run(text, context.conversationKey);
         return result.answer ?? result.error ?? `No pude completar la tarea (${result.status}).`;
       },
       log: (message) => app.log.info(message),
     });
     app.log.info('Discord integration enabled');
   } else if (discordToken && !runtime) {
-    app.log.warn('DISCORD_BOT_TOKEN is set but OPENAI_MODEL is missing; Discord is disabled');
+    app.log.warn('DISCORD_BOT_TOKEN is set but no agent backend is configured; Discord is disabled');
   }
 
   const shutdown = async (signal: string): Promise<void> => {

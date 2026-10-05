@@ -10,6 +10,12 @@ in your shell (or your existing local dotenv configuration; never commit secrets
 - `DOTY_TOKEN`: bearer token required by `POST /message` and `GET /events`.
 - `DATABASE_URL`: optional Postgres connection string; when set, the server uses
   `PgEventLog` and the existing `events` table for replay and persistence.
+- `OPENCODE_SERVER_URL`: when set, all runs are delegated to a local
+  `opencode serve` (which owns the conversation history); otherwise the
+  in-process OpenAI-compatible loop is used.
+- `OPENCODE_MODEL`: `provider/model` for OpenCode (default
+  `opencode-go/deepseek-v4.1-flash`).
+- `OPENCODE_AGENT`: optional OpenCode agent name (e.g. `build`).
 - `DISCORD_BOT_TOKEN`: optional; enables the Discord integration (receive and
   reply with the agent).
 - `DISCORD_ALLOWED_USER_IDS`: comma-separated Discord user ids allowed to talk to
@@ -126,8 +132,9 @@ splits replies over 2000 characters. It uses the built-in `WebSocket` and `fetch
 — no `discord.js` dependency. Incoming text is appended to the event log as a
 `message` event, so it also appears in the desktop chat.
 
-**Conversation memory.** Doty keeps a bounded window of recent turns per
-conversation — one scope per DM user (`discord:dm:<userId>`) and one per guild
-(`discord:guild:<guildId>`) — and prepends it to the model context, so it
-remembers what was said. Turns are stored as `conversation_turn` events (ignored
-by the desktop chat), so the memory survives restarts without a new table.
+**Conversation memory.** When the OpenCode backend is enabled, each conversation
+gets its own OpenCode session — one per DM user (`discord:dm:<userId>`), one per
+guild (`discord:guild:<guildId>`), and one for the desktop (`desktop`) — and Doty
+only stores the session id (as `conversation_session` events). The history lives
+in OpenCode and is continued by posting to that session, so it survives restarts
+without Doty re-sending past turns.

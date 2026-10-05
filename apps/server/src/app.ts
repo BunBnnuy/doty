@@ -14,6 +14,7 @@ import { registerHealthRoutes } from './routes/health.js';
 import { registerMessageRoutes } from './routes/message.js';
 import { registerHarnessRoutes } from './routes/harness.js';
 import { AgentRuntime, type AgentRuntimeOptions } from './agent/runtime.js';
+import type { AgentRunner } from './agent/runner.js';
 import { createHash, timingSafeEqual } from 'node:crypto';
 
 export interface BuildAppOptions {
@@ -23,6 +24,8 @@ export interface BuildAppOptions {
   logger?: boolean;
   /** Opt-in, injectable model runtime. Omitted = event-only scaffold. */
   agent?: AgentRuntimeOptions;
+  /** Pre-built agent backend (e.g. the OpenCode agent). Takes precedence. */
+  runner?: AgentRunner;
   /** Shared bearer token. Defaults to DOTY_TOKEN; unset retains dev-only open mode. */
   token?: string;
 }
@@ -30,8 +33,8 @@ export interface BuildAppOptions {
 export interface BuiltApp {
   app: FastifyInstance;
   log: EventLog;
-  /** Present when an agent provider was injected (enables integrations). */
-  runtime?: AgentRuntime;
+  /** Present when an agent provider or runner was injected (enables integrations). */
+  runtime?: AgentRunner;
 }
 
 /** Routes that require the shared bearer token when DOTY_TOKEN is set. */
@@ -61,7 +64,8 @@ export function buildApp(options: BuildAppOptions = {}): BuiltApp {
   registerHealthRoutes(app);
   registerEventRoutes(app, log);
   registerHarnessRoutes(app, log);
-  const runtime = options.agent ? new AgentRuntime(options.agent, log) : undefined;
+  const runtime: AgentRunner | undefined = options.runner
+    ?? (options.agent ? new AgentRuntime(options.agent, log) : undefined);
   registerMessageRoutes(app, log, runtime ? (text) => runtime.start(text) : undefined);
   if (runtime) app.addHook('onClose', async () => runtime.close());
 
