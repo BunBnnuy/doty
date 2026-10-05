@@ -28,11 +28,46 @@ body {
   width: 100%;
   height: 100%;
   min-height: 0;
+  background: transparent;
+}
+
+/* Collapsed: only the character (and its satellites) is visible. */
+#stage {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+}
+
+#app.collapsed #stage,
+#app.collapsed #stage #avatar-slot {
+  cursor: grab;
+}
+
+#app.collapsed #stage {
+  flex: 1 1 auto;
+  height: 100%;
+}
+
+/* Expanded: the chat panel, styled like the old window chrome. */
+#panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 16px;
   overflow: hidden;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
+}
+
+#app.collapsed #panel {
+  display: none;
+}
+
+/* When there is more room above than below, the panel opens upward. */
+#app.upward {
+  flex-direction: column-reverse;
 }
 
 #presence {
@@ -44,6 +79,16 @@ body {
   padding: 8px 10px 4px;
   user-select: none;
   -webkit-user-select: none;
+  cursor: grab;
+}
+
+#presence:active {
+  cursor: grabbing;
+}
+
+#avatar-slot,
+.drag-catch {
+  cursor: grab;
 }
 
 #avatar-slot {
@@ -72,12 +117,13 @@ body {
   top: calc(50% - 38px);
   width: 76px;
   height: 76px;
+  pointer-events: none;
 }
 
 #harness-summary {
   margin: 0;
-  color: var(--muted);
-  font-size: 10px;
+  color: var(--ink);
+  font-size: 12.5px;
   line-height: 1.4;
 }
 
@@ -90,7 +136,7 @@ body {
   border: 1px solid var(--line);
   border-radius: 10px;
   background: rgba(0, 0, 0, 0.25);
-  font-size: 11px;
+  font-size: 12.5px;
   user-select: text;
 }
 
@@ -100,7 +146,7 @@ body {
 #harness-fields { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 8px; margin: 6px 0; }
 #harness-fields dt { color: var(--muted); }
 #harness-fields dd { margin: 0; overflow-wrap: anywhere; }
-.harness-privacy { margin: 6px 0 0; color: var(--muted); font-size: 10px; }
+.harness-privacy { margin: 6px 0 0; color: var(--muted); font-size: 11.5px; }
 
 #presence-meta {
   min-width: 0;
@@ -112,7 +158,7 @@ body {
 
 #label {
   margin: 0;
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.3;
   color: var(--ink);
   white-space: nowrap;
@@ -129,7 +175,7 @@ body {
   align-self: flex-start;
   padding: 1px 7px;
   border-radius: 999px;
-  font-size: 10px;
+  font-size: 11.5px;
   letter-spacing: 0.04em;
   text-transform: lowercase;
   color: var(--muted);

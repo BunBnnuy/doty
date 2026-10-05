@@ -162,6 +162,9 @@ function applyGranular(store: DotStore, type: string, data: unknown): boolean {
   }
 }
 
+/** Events that carry the assistant's answer. Everything else is step noise. */
+const ANSWER_EVENTS = new Set(['assistant', 'reply', 'response', 'assistant_message', 'final']);
+
 export function toChatLine(frame: SseFrame): ChatLine | null {
   if (SILENT.has(frame.type)) return null;
 
@@ -172,20 +175,23 @@ export function toChatLine(frame: SseFrame): ChatLine | null {
     return { seq: frame.seq, role, text };
   }
 
-  if (frame.type === 'assistant' || frame.type === 'reply' || frame.type === 'response') {
+  if (ANSWER_EVENTS.has(frame.type)) {
     const text = readText(frame.data);
     if (!text) return null;
+    // `assistant_message` (per turn) and `final` (run end) repeat the same text;
+    // the chat panel drops the duplicate by text.
     return { seq: frame.seq, role: 'assistant', text };
   }
 
   if (frame.type === 'error') {
     const text = readText(frame.data) ?? 'Something went wrong';
-    return { seq: frame.seq, role: 'run', text: clip(`${frame.type} · ${text}`), tone: 'error' };
+    return { seq: frame.seq, role: 'run', text, tone: 'error' };
   }
 
-  const summary = summarize(frame);
-  if (!summary) return null;
-  return { seq: frame.seq, role: 'run', text: summary };
+  // model_step, tool_call, tool_result, observation, dot_state, run_started, …
+  // are intentionally hidden: the chat shows only what you said and what Doty
+  // answered.
+  return null;
 }
 
 function summarize(frame: SseFrame): string | null {

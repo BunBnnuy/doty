@@ -14,8 +14,8 @@
       {
         "label": "main",
         "title": "Doty",
-        "width": 320,
-        "height": 440,
+        "width": 220,
+        "height": 220,
         "resizable": false,
         "maximizable": false,
         "decorations": false,
@@ -27,7 +27,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost http://localhost:8787 http://127.0.0.1:8787 http://localhost:* http://127.0.0.1:*"
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost http://localhost:8787 http://127.0.0.1:8787 http://localhost:* http://127.0.0.1:* https://doty.killbunny.top"
     }
   },
   "bundle": {

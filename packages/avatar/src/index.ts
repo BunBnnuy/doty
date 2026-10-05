@@ -73,7 +73,8 @@ function createRenderer(): Renderer {
   svg.style.overflow = 'hidden';
   svg.setAttribute('aria-hidden', 'true');
 
-  const backdrop = svgElement('rect', { width: 100, height: 100, fill: '#292929' });
+  // No backdrop: the floating character must sit on a transparent window.
+  const backdrop = svgElement('rect', { width: 100, height: 100, fill: 'transparent' });
   const scene = svgElement('g', { 'data-part': 'head' });
   // Mirror broad silhouettes, not dozens of tiny strands: readable even at 48px.
   const tails = [false, true].map((mirror) => {

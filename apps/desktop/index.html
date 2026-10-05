@@ -8,54 +8,59 @@
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
-    <div id="app" data-connection="reconnecting">
-      <header id="presence">
+    <div id="app" class="collapsed" data-connection="reconnecting">
+      <!-- Always visible: the character plus the harness satellites. -->
+      <div id="stage">
         <div id="avatar-slot">
           <div id="avatar"></div>
-          <div class="drag-catch" data-tauri-drag-region></div>
+          <div class="drag-catch"></div>
         </div>
-        <div id="presence-meta" data-tauri-drag-region>
-          <p id="label" data-tauri-drag-region></p>
-          <p id="connection" data-connection="reconnecting" data-tauri-drag-region>reconnecting</p>
-          <p id="harness-summary">Starting local watchers…</p>
-        </div>
-      </header>
-      <section id="harness-details" aria-label="Local harness session details" hidden>
-        <div class="harness-heading"><strong>Local session</strong><button id="harness-close" type="button" aria-label="Close session details">×</button></div>
-        <dl id="harness-fields"></dl>
-        <p class="harness-privacy">Metadata only · transcripts stay private</p>
-      </section>
-      <div id="transcript">
-        <ol id="messages" aria-live="polite" aria-relevant="additions"></ol>
-        <p id="empty">Connecting to the server…</p>
       </div>
-      <form id="composer">
-        <label class="sr-only" for="composer-input">Message</label>
-        <input
-          id="composer-input"
-          type="text"
-          name="text"
-          maxlength="10000"
-          autocomplete="off"
-          placeholder="Message Doty…"
-        />
-        <button id="send" type="submit">Send</button>
-      </form>
-      <details id="server-settings" open>
-        <summary>Server</summary>
-        <form id="server-form">
-          <label class="sr-only" for="server-url">Server URL</label>
+
+      <!-- Revealed by clicking the character. -->
+      <aside id="panel" aria-label="Doty chat">
+        <header id="presence">
+          <p id="label"></p>
+          <p id="connection" data-connection="reconnecting">reconnecting</p>
+          <p id="harness-summary">Starting local watchers…</p>
+        </header>
+        <section id="harness-details" aria-label="Local harness session details" hidden>
+          <div class="harness-heading"><strong>Local session</strong><button id="harness-close" type="button" aria-label="Close session details">×</button></div>
+          <dl id="harness-fields"></dl>
+          <p class="harness-privacy">Metadata only · transcripts stay private</p>
+        </section>
+        <div id="transcript">
+          <ol id="messages" aria-live="polite" aria-relevant="additions"></ol>
+          <p id="empty">Connecting to the server…</p>
+        </div>
+        <form id="composer">
+          <label class="sr-only" for="composer-input">Message</label>
           <input
-            id="server-url"
-            type="url"
-            name="server"
-            spellcheck="false"
-            inputmode="url"
-            placeholder="http://localhost:8787"
+            id="composer-input"
+            type="text"
+            name="text"
+            maxlength="10000"
+            autocomplete="off"
+            placeholder="Message Doty…"
           />
-          <button type="submit">Set</button>
+          <button id="send" type="submit">Send</button>
         </form>
-      </details>
+        <details id="server-settings">
+          <summary>Server</summary>
+          <form id="server-form">
+            <label class="sr-only" for="server-url">Server URL</label>
+            <input
+              id="server-url"
+              type="url"
+              name="server"
+              spellcheck="false"
+              inputmode="url"
+              placeholder="http://localhost:8787"
+            />
+            <button type="submit">Set</button>
+          </form>
+        </details>
+      </aside>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

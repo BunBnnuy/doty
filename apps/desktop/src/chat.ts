@@ -263,6 +263,14 @@ export function mountChat(options: MountChatOptions): ChatPanel {
       }
     }
 
+    if (line.role === 'assistant') {
+      const last = items[items.length - 1];
+      if (last && last.role === 'assistant' && last.text === line.text) {
+        if (line.seq !== undefined) seenSeq.add(line.seq);
+        return;
+      }
+    }
+
     if (line.seq !== undefined) seenSeq.add(line.seq);
     pushItem({
       id: line.seq !== undefined ? `seq-${line.seq}` : `local-${++localSeq}`,
