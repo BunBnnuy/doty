@@ -12,19 +12,32 @@ import { pathToFileURL } from 'node:url';
 import 'dotenv/config';
 import { buildApp } from './app.js';
 import { OpenAIChatProvider, openAIConfigFromEnv } from './provider/openai.js';
+import { PgEventLog } from './events/pg-log.js';
 
 const PORT = Number.parseInt(process.env.PORT ?? '8787', 10);
 const HOST = process.env.HOST ?? '0.0.0.0';
 
 async function main(): Promise<void> {
+  const databaseUrl = process.env.DATABASE_URL?.trim();
+  const pgLog = databaseUrl ? new PgEventLog(databaseUrl) : undefined;
   const agent = process.env.OPENAI_MODEL?.trim()
     ? { provider: new OpenAIChatProvider(openAIConfigFromEnv()) }
     : undefined;
-  const { app } = buildApp({ logger: true, ...(agent ? { agent } : {}) });
+  const { app } = buildApp({
+    logger: true,
+    ...(pgLog ? { log: pgLog } : {}),
+    ...(agent ? { agent } : {}),
+  });
+
+  if (pgLog) await pgLog.ready;
+  if (!process.env.DOTY_TOKEN?.trim()) {
+    app.log.warn('DOTY_TOKEN is unset: API bearer authentication is DISABLED (development only)');
+  }
 
   const shutdown = async (signal: string): Promise<void> => {
     app.log.info({ signal }, 'shutting down');
     await app.close();
+    if (pgLog) await pgLog.close();
     process.exit(0);
   };
   process.once('SIGINT', () => void shutdown('SIGINT'));

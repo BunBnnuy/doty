@@ -5,9 +5,8 @@
  * `id` and the replay cursor. A reconnecting client sends its last seen `seq`
  * (as `Last-Event-ID`); we replay everything after it, then stream live.
  *
- * This module ships an in-memory implementation so the API runs with **no
- * Postgres**. A `PgEventLog` (against `src/db/schema.ts`) slots in behind the
- * same `EventLog` interface later without touching the routes.
+ * The in-memory implementation keeps the API runnable with **no Postgres**.
+ * `PgEventLog` uses the same interface when DATABASE_URL is configured.
  */
 
 import type { ServerEvent } from '@doty/protocol';

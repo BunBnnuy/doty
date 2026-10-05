@@ -7,6 +7,15 @@ in your shell (or your existing local dotenv configuration; never commit secrets
 - `OPENAI_BASE_URL`: OpenAI-compatible API root, including `/v1` when needed;
   defaults to `https://api.openai.com/v1`.
 - `OPENAI_API_KEY`: provider credential; optional for unauthenticated local APIs.
+- `DOTY_TOKEN`: bearer token required by `POST /message` and `GET /events`.
+- `DATABASE_URL`: optional Postgres connection string; when set, the server uses
+  `PgEventLog` and the existing `events` table for replay and persistence.
+
+Without `DOTY_TOKEN`, bearer authentication is disabled for local development and
+the server logs a prominent warning. **Do not expose that mode publicly.** When
+configured, send `Authorization: Bearer <DOTY_TOKEN>` on both `/message` and the
+SSE `/events` connection. The token is never logged. `/message` retains its
+existing `202 Accepted` response.
 
 Without `OPENAI_MODEL`, `/message` keeps its original event-only behavior.
 `buildApp({ agent: { provider, tools?, persona?, maxSteps? } })` injects a provider
@@ -35,10 +44,15 @@ become observations so the model can recover; provider errors end the run.
   by the server registry, never by model arguments.
 
 Approval UI/resumption, artifact download/retention, persistence, scheduling,
-and global concurrency/cost budgets are not implemented. The runner is process-local,
-using the existing in-memory EventLog. For deployment, enforce network egress
-restrictions: DNS preflight checks alone do **not** prevent DNS rebinding between
-validation and native fetch. Do not expose this unauthenticated scaffold publicly.
+and global concurrency/cost budgets are not implemented. Without `DATABASE_URL`,
+the runner uses the process-local in-memory EventLog. With Postgres configured,
+history is hydrated before listening, writes are persisted to `events`, and a
+poller discovers newly inserted rows. The synchronous `EventLog` contract means
+in-process appends are queued for database writes and flushed on orderly shutdown;
+use a single server writer, and note that an abrupt process crash can lose writes
+still in that queue. For deployment, enforce network egress restrictions: DNS
+preflight checks alone do **not** prevent DNS rebinding between validation and
+native fetch.
 
 ## Offline verification
 
