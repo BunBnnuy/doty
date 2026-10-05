@@ -9,6 +9,7 @@
 export const DEFAULT_SERVER = 'http://localhost:8787';
 
 const STORAGE_KEY = 'doty.server';
+const TOKEN_STORAGE_KEY = 'doty.token';
 
 export class HttpError extends Error {
   readonly status: number;
@@ -47,6 +48,32 @@ export function rememberServerUrl(url: string): void {
   }
 }
 
+/** Query token, persisted token, then the optional build-time token. */
+export function resolveToken(): string | null {
+  const fromQuery = new URLSearchParams(window.location.search).get('token');
+  if (fromQuery?.trim()) {
+    rememberToken(fromQuery.trim());
+    return fromQuery.trim();
+  }
+  try {
+    const stored = localStorage.getItem(TOKEN_STORAGE_KEY);
+    if (stored?.trim()) return stored.trim();
+  } catch {
+    // Private mode / sandboxed webview - fall through.
+  }
+  const env = (import.meta as ImportMeta & { env?: Record<string, unknown> }).env;
+  const value = env?.VITE_DOTY_TOKEN;
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function rememberToken(token: string): void {
+  try {
+    localStorage.setItem(TOKEN_STORAGE_KEY, token);
+  } catch {
+    // Persistence is best-effort; the query token still applies.
+  }
+}
+
 /** Accept only http(s) origins. Returns null when the value is not a URL. */
 export function normalizeServerUrl(input: string): string | null {
   const trimmed = input.trim();
@@ -73,6 +100,7 @@ export function isRetryableSend(error: unknown): boolean {
 export async function postMessage(
   serverUrl: string,
   text: string,
+  token: string | null,
   signal?: AbortSignal,
 ): Promise<number | undefined> {
   const response = await fetch(commandUrl(serverUrl, '/message'), {
@@ -80,6 +108,7 @@ export async function postMessage(
     headers: {
       accept: 'application/json',
       'content-type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
     body: JSON.stringify({ type: 'message', text }),
     cache: 'no-store',
@@ -88,6 +117,9 @@ export async function postMessage(
   });
 
   if (!response.ok) {
+    if (response.status === 401) {
+      throw new HttpError('Authentication failed. Set a valid token with ?token=... and reload.', 401);
+    }
     let detail = String(response.status);
     try {
       const body = (await response.json()) as { error?: unknown };

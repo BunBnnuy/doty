@@ -8,7 +8,7 @@
  */
 import { mountAvatar } from '@doty/avatar';
 import { createDotStore, startFakeDriver, type Connection, type DotStore } from '@doty/dot-state';
-import { postMessage, rememberServerUrl, resolveServerUrl } from './api.js';
+import { postMessage, rememberServerUrl, resolveServerUrl, resolveToken } from './api.js';
 import { mountChat } from './chat.js';
 import { openEventStream, type StreamStatus } from './sse.js';
 import { applyFrame } from './wire.js';
@@ -32,6 +32,7 @@ const avatarSlot = document.getElementById('avatar-slot');
 const harnessTeam = avatarSlot instanceof HTMLElement ? mountHarnessTeam(avatarSlot) : undefined;
 
 let serverUrl = resolveServerUrl();
+const token = resolveToken();
 let fallback = false;
 let stopDriver: (() => void) | undefined;
 
@@ -54,7 +55,7 @@ let stream: ReturnType<typeof openEventStream> | undefined;
 const chat = mountChat({
   serverUrl,
   lastSeq: () => stream?.lastSeq() ?? 0,
-  send: (text) => postMessage(serverUrl, text),
+  send: (text) => postMessage(serverUrl, text, token),
   onServerUrl(next) {
     rememberServerUrl(next);
     if (next === serverUrl) return;
@@ -65,6 +66,8 @@ const chat = mountChat({
 
 stream = openEventStream({
   url: () => serverUrl,
+  token: () => token,
+  onUnauthorized: () => chat.showAuthError(),
   onFrame(frame) {
     try {
       applyFrame(store, frame);

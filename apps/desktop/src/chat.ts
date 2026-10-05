@@ -19,6 +19,7 @@ export interface ChatPanel {
   /** Server log restarted. Forget seqs so the full replay can render again. */
   forgetHistory(): void;
   flush(): Promise<void>;
+  showAuthError(): void;
 }
 
 export interface MountChatOptions {
@@ -110,6 +111,20 @@ export function mountChat(options: MountChatOptions): ChatPanel {
       serverDetails.open = status !== 'online';
     }
     renderEmpty();
+  }
+
+  function showAuthError(): void {
+    const existing = items.find((item) => item.id === 'auth-error');
+    if (existing) return;
+    pushItem({
+      id: 'auth-error',
+      role: 'run',
+      text: 'Authentication failed. Set a valid token with ?token=... and reload.',
+      status: 'error',
+      afterSeq: options.lastSeq(),
+      tone: 'error',
+      note: '401',
+    });
   }
 
   async function sendOutgoing(text: string): Promise<void> {
@@ -317,7 +332,7 @@ export function mountChat(options: MountChatOptions): ChatPanel {
     renderEmpty();
   }
 
-  return { ingest, setConnection, clear, flush, forgetHistory };
+  return { ingest, setConnection, clear, flush, forgetHistory, showAuthError };
 }
 
 function statusLabel(status: Item['status']): string {

@@ -149,6 +149,8 @@ export interface EventStreamOptions {
   url: () => string;
   onFrame: (frame: SseFrame) => void;
   onStatus: (status: StreamStatus) => void;
+  token?: () => string | null;
+  onUnauthorized?: () => void;
   /**
    * The server's `hello.cursor` moved backwards (process restart, empty log).
    * The replay cursor is dropped; the next connect replays from the start.
@@ -201,6 +203,8 @@ export function openEventStream(options: EventStreamOptions): EventStream {
       let cursorReset = false;
       try {
         const headers: Record<string, string> = { accept: 'text/event-stream' };
+        const token = options.token?.();
+        if (token) headers.Authorization = `Bearer ${token}`;
         if (lastSeq > 0) headers['Last-Event-ID'] = String(lastSeq);
         const response = await fetch(eventsUrl(options.url()), {
           method: 'GET',
@@ -211,6 +215,7 @@ export function openEventStream(options: EventStreamOptions): EventStream {
         });
         clearTimeout(connectTimeout);
         if (!response.ok || !response.body) {
+          if (response.status === 401) options.onUnauthorized?.();
           throw new Error(`GET /events failed: ${response.status}`);
         }
         everOpened = true;
