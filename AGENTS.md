@@ -38,3 +38,25 @@ in parallel across disjoint directories.
 2. What you verified, and how.
 3. Anything you could not do and why.
 4. Any dependency you need added.
+
+## Model routing (project rule)
+
+- **OpenAI models are run through the Codex CLI, never as a subagent model.**
+  - Correct: `codex exec --cd <dir> --sandbox workspace-write --approve-for-me -o <out> "<task>"`
+  - Wrong: `subagent(model: "opencode/gpt-6.1-sol" | "opencode-go/gpt-6-luna" | ...)`
+  - Rationale: the Codex CLI is the native, authenticated harness (uses the
+    user's Codex plan and tools). OpenAI models surfaced through the OpenCode
+    catalog are not the same path.
+- Non-OpenAI work (recon, verification, cheap/parallel mechanical tasks) may
+  still use the `subagent` tool with a non-OpenAI model.
+
+Canonical invocation:
+
+```text
+codex exec --cd <repo> --sandbox workspace-write --approve-for-me -o <last-message.json> "<task>"
+```
+
+Useful flags: `-C/--cd`, `-s/--sandbox read-only|workspace-write|danger-full-access`,
+`--worktree` (isolated managed git worktree), `-m/--model`, `--json` (JSONL
+events), `-o/--output-last-message`, `-i/--image`, `--ephemeral`,
+`--skip-git-repo-check`.
