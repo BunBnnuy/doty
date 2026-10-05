@@ -1,0 +1,13 @@
+node_modules/
+dist/
+target/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+.worktrees/

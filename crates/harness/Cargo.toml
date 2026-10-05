@@ -1,0 +1,13 @@
+[package]
+name = "doty-harness"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+
+[[bin]]
+name = "doty-watch"
+path = "src/main.rs"

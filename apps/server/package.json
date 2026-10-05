@@ -1,0 +1,24 @@
+{
+  "name": "@doty/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@doty/harness-events": "*",
+    "@doty/protocol": "*",
+    "@fastify/cors": "^11.3.0",
+    "dotenv": "^18.0.5",
+    "drizzle-orm": "^0.45.3",
+    "fastify": "^5.12.5",
+    "pg": "^8.23.1",
+    "pg-boss": "^12.36.0",
+    "pino": "^10.4.0",
+    "zod": "^4.6.5"
+  }
+}
