@@ -9,6 +9,8 @@ export interface HarnessStatusSource {
 export interface SatellitesOptions {
   /** Square orbit area in CSS pixels. Center the avatar in this area. Default 136. */
   size?: number;
+  /** Diameter of each satellite dot, in CSS pixels. Default 17. */
+  dotSize?: number;
   reducedMotion?: boolean;
   onSelect?: (status: HarnessStatus) => void;
 }
@@ -54,6 +56,9 @@ export function mountSatellites(
   options: SatellitesOptions = {},
 ): SatellitesHandle {
   const size = Math.max(96, options.size ?? 136);
+  const dotSize = Math.max(8, Math.round(options.dotSize ?? 17));
+  const buttonSize = dotSize + 7;
+  const badgeFont = Math.max(7, Math.round(dotSize * 0.55));
   const element = document.createElement('div');
   element.setAttribute('data-doty-satellites', '');
   element.setAttribute('role', 'group');
@@ -85,7 +90,7 @@ export function mountSatellites(
       const ring = Math.floor(index / 12);
       const inRing = Math.min(12, count - ring * 12);
       const base = (index % 12) / inRing * Math.PI * 2 - Math.PI / 2;
-      const radius = size / 2 - 14 + ring * 24;
+      const radius = size / 2 - (buttonSize / 2 + 2) + ring * (buttonSize + 6);
       const activity = ACTIVITY[satellite.status.status];
       const paused = satellite.button.getAttribute('data-paused') === 'true';
       if (!paused) satellite.angle += dt * activity.speed;
@@ -93,7 +98,7 @@ export function mountSatellites(
       const pulse = reduced ? 1 : 1 + Math.sin(elapsed * 4) * activity.pulse;
       const x = extent / 2 + Math.cos(angle) * radius;
       const y = extent / 2 + Math.sin(angle) * radius;
-      if (!paused || reduced) satellite.button.style.transform = `translate(${(x - 12).toFixed(2)}px,${(y - 12).toFixed(2)}px)`;
+      if (!paused || reduced) satellite.button.style.transform = `translate(${(x - buttonSize / 2).toFixed(2)}px,${(y - buttonSize / 2).toFixed(2)}px)`;
       satellite.dot.style.transform = `scale(${pulse.toFixed(3)})`;
       satellite.dot.style.opacity = satellite.status.status === 'stale' ? '0.55' : '1';
       index += 1;
@@ -130,14 +135,14 @@ export function mountSatellites(
         const button = document.createElement('button');
         button.type = 'button';
         button.setAttribute('data-doty-satellite', '');
-        button.style.cssText = 'position:absolute;top:0;left:0;width:24px;height:24px;padding:0;border:0;border-radius:50%;background:transparent;display:grid;place-items:center;pointer-events:auto;cursor:pointer;';
+        button.style.cssText = `position:absolute;top:0;left:0;width:${buttonSize}px;height:${buttonSize}px;padding:0;border:0;border-radius:50%;background:transparent;display:grid;place-items:center;pointer-events:auto;cursor:pointer;`;
         const dot = document.createElement('span');
         dot.setAttribute('data-satellite-dot', '');
         dot.setAttribute('aria-hidden', 'true');
-        dot.style.cssText = 'display:grid;place-items:center;width:17px;height:17px;border:2px solid;border-radius:50%;font:bold 9px/1 system-ui;';
+        dot.style.cssText = `display:grid;place-items:center;width:${dotSize}px;height:${dotSize}px;border:2px solid;border-radius:50%;font:bold ${badgeFont}px/1 system-ui;`;
         const badge = document.createElement('span');
         badge.setAttribute('aria-hidden', 'true');
-        badge.style.cssText = 'position:absolute;right:-1px;bottom:-1px;font:bold 9px/1 system-ui;background:#141320;border-radius:4px;padding:1px;';
+        badge.style.cssText = `position:absolute;right:-1px;bottom:-1px;font:bold ${badgeFont}px/1 system-ui;background:#141320;border-radius:4px;padding:1px;`;
         button.append(dot, badge);
         satellite = { status, button, dot, badge, angle: 0 };
         const selected = satellite;

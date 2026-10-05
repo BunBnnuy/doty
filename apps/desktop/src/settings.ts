@@ -7,13 +7,16 @@
 
 export interface DotySettings {
   serverUrl: string;
-  /** Square orbit area for the harness satellites, in CSS pixels. */
+  /** Square orbit area for the harness satellites, in CSS pixels (the radius). */
   orbitSize: number;
+  /** Diameter of each satellite dot, in CSS pixels. */
+  orbitalSize: number;
   /** Diameter of the character, in CSS pixels. */
   dotySize: number;
 }
 
 export const ORBIT_RANGE = { min: 110, max: 320 } as const;
+export const ORBITAL_RANGE = { min: 8, max: 44 } as const;
 export const DOTY_RANGE = { min: 48, max: 160 } as const;
 
 const KEY = 'doty.settings';
@@ -21,6 +24,7 @@ const KEY = 'doty.settings';
 export const DEFAULT_SETTINGS: DotySettings = {
   serverUrl: 'http://localhost:8787',
   orbitSize: 150,
+  orbitalSize: 17,
   dotySize: 76,
 };
 
@@ -37,6 +41,7 @@ export function normalizeSettings(input: Partial<DotySettings>): DotySettings {
         ? input.serverUrl.trim()
         : DEFAULT_SETTINGS.serverUrl,
     orbitSize: clampNumber(input.orbitSize, ORBIT_RANGE.min, ORBIT_RANGE.max, DEFAULT_SETTINGS.orbitSize),
+    orbitalSize: clampNumber(input.orbitalSize, ORBITAL_RANGE.min, ORBITAL_RANGE.max, DEFAULT_SETTINGS.orbitalSize),
     dotySize: clampNumber(input.dotySize, DOTY_RANGE.min, DOTY_RANGE.max, DEFAULT_SETTINGS.dotySize),
   };
 }

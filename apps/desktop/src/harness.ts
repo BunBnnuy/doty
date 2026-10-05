@@ -22,6 +22,8 @@ export interface HarnessNotice {
 export interface HarnessTeamOptions {
   /** Square orbit area for the satellites, in CSS pixels. */
   orbitSize?: number;
+  /** Diameter of each satellite dot, in CSS pixels. */
+  dotSize?: number;
   onNotice?: (notice: HarnessNotice) => void;
 }
 
@@ -130,6 +132,7 @@ export function mountHarnessTeam(
 ): { destroy(): void } {
   const store = createHarnessStore();
   const base = Math.max(96, Math.round(options.orbitSize ?? 150));
+  const baseDot = Math.max(8, Math.round(options.dotSize ?? 17));
   const panel = document.getElementById('harness-details');
   const details = document.getElementById('harness-fields');
   const activityEl = document.getElementById('harness-activity');
@@ -263,6 +266,7 @@ export function mountHarnessTeam(
 
   const satellites = mountSatellites(container, store.source, {
     size: base,
+    dotSize: baseDot,
     onSelect(status) { selected = status; renderDetails(); },
   });
   const unsubscribe = store.source.subscribe((statuses) => {

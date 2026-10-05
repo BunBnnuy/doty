@@ -18,6 +18,7 @@ import { applyFrame } from './wire.js';
 import { mountHarnessTeam, type HarnessNotice, type HarnessTeamOptions } from './harness.js';
 import {
   DOTY_RANGE,
+  ORBITAL_RANGE,
   ORBIT_RANGE,
   loadSettings,
   normalizeSettings,
@@ -46,6 +47,7 @@ store.dispatch({ type: 'connection', value: 'reconnecting' });
 
 const harnessOptions = (): HarnessTeamOptions => ({
   orbitSize: settings.orbitSize,
+  dotSize: settings.orbitalSize,
   onNotice: handleNotice,
 });
 
@@ -175,8 +177,10 @@ const settingsPanel = document.getElementById('settings');
 const chatPanel = document.getElementById('panel');
 const serverField = document.getElementById('setting-server');
 const orbitField = document.getElementById('setting-orbit');
+const orbitalField = document.getElementById('setting-orbital');
 const dotyField = document.getElementById('setting-doty');
 const orbitValue = document.getElementById('setting-orbit-value');
+const orbitalValue = document.getElementById('setting-orbital-value');
 const dotyValue = document.getElementById('setting-doty-value');
 
 function showSettings(show: boolean): void {
@@ -194,10 +198,10 @@ function applySettings(next: DotySettings): void {
     avatar.destroy();
     avatar = mountAvatar(avatarMount, store, { size: settings.dotySize });
   }
-  if (settings.orbitSize !== previous.orbitSize) {
+  if (settings.orbitSize !== previous.orbitSize || settings.orbitalSize !== previous.orbitalSize) {
     harnessTeam.destroy();
     harnessTeam = mountHarnessTeam(slotMount, harnessOptions());
-    if (!panelOpen) void applyCollapsedSize();
+    if (!panelOpen && settings.orbitSize !== previous.orbitSize) void applyCollapsedSize();
   }
   if (settings.serverUrl !== previous.serverUrl) {
     serverUrl = settings.serverUrl;
@@ -217,7 +221,13 @@ function syncSettingFields(): void {
     dotyField.max = String(DOTY_RANGE.max);
     dotyField.value = String(settings.dotySize);
   }
+  if (orbitalField instanceof HTMLInputElement) {
+    orbitalField.min = String(ORBITAL_RANGE.min);
+    orbitalField.max = String(ORBITAL_RANGE.max);
+    orbitalField.value = String(settings.orbitalSize);
+  }
   if (orbitValue) orbitValue.textContent = String(settings.orbitSize);
+  if (orbitalValue) orbitalValue.textContent = String(settings.orbitalSize);
   if (dotyValue) dotyValue.textContent = String(settings.dotySize);
 }
 syncSettingFields();
@@ -236,6 +246,12 @@ orbitField?.addEventListener('input', () => {
 });
 orbitField?.addEventListener('change', () => {
   if (orbitField instanceof HTMLInputElement) applySettings({ ...settings, orbitSize: Number(orbitField.value) });
+});
+orbitalField?.addEventListener('input', () => {
+  if (orbitalField instanceof HTMLInputElement && orbitalValue) orbitalValue.textContent = orbitalField.value;
+});
+orbitalField?.addEventListener('change', () => {
+  if (orbitalField instanceof HTMLInputElement) applySettings({ ...settings, orbitalSize: Number(orbitalField.value) });
 });
 dotyField?.addEventListener('input', () => {
   if (dotyField instanceof HTMLInputElement && dotyValue) dotyValue.textContent = dotyField.value;
