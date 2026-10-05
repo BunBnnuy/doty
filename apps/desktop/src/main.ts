@@ -12,11 +12,11 @@
  */
 import { mountAvatar } from '@doty/avatar';
 import { createDotStore, startFakeDriver, type Connection, type DotStore } from '@doty/dot-state';
-import { forgetToken, postMessage, rememberToken, resolveToken } from './api.js';
+import { forgetToken, postHarnessMessage, postHarnessNotice, postMessage, rememberToken, resolveToken, type HarnessMessagePayload, type HarnessNoticePayload } from './api.js';
 import { mountChat, type ChatMessage } from './chat.js';
 import { openEventStream, type StreamStatus } from './sse.js';
 import { applyFrame } from './wire.js';
-import { mountHarnessTeam, type HarnessNotice, type HarnessResponse, type HarnessTeamOptions } from './harness.js';
+import { mountHarnessTeam, readHarnessMessage, readHarnessNotice, type HarnessNotice, type HarnessResponse, type HarnessTeamOptions } from './harness.js';
 import { subscribeQuestions } from './questions.js';
 import {
   AUTO_CLOSE_RANGE,
@@ -45,6 +45,28 @@ const avatarMount: HTMLElement = avatarHost;
 const slotMount: HTMLElement = avatarSlot;
 
 let settings: DotySettings = loadSettings();
+
+// Name of this machine, included in shared harness events so every client can
+// tell where a task ran. Resolved from the Tauri shell; falls back to a label.
+let machineName = 'this device';
+if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+  void import('@tauri-apps/api/core')
+    .then(({ invoke }) => invoke<string>('device_name'))
+    .then((name) => {
+      if (typeof name === 'string' && name.trim()) machineName = name.trim();
+    })
+    .catch(() => {
+      // Keep the fallback label.
+    });
+}
+
+// Ids of shared harness events already rendered, so the machine that published
+// an event does not double-render it when the server echoes it back.
+const seenHarness = new Set<string>();
+
+function harnessEventId(machine: string, harness: string, sessionId: string, ts: number, kind: string): string {
+  return `${machine}:${harness}:${sessionId}:${ts}:${kind}`;
+}
 
 const store = createDotStore();
 store.dispatch({ type: 'connection', value: 'reconnecting' });
@@ -121,9 +143,19 @@ stream = openEventStream({
       const cursor = readHelloCursor(frame.data);
       if (cursor !== undefined) replayCursor = cursor;
     }
+    const live = frame.seq === undefined || frame.seq > replayCursor;
     try {
+      if (frame.type === 'harness_message') {
+        const payload = readHarnessMessage(frame.data);
+        if (payload) renderHarnessMessage(payload, live);
+        return;
+      }
+      if (frame.type === 'harness_notice') {
+        const payload = readHarnessNotice(frame.data);
+        if (payload) renderHarnessNotice(payload, live);
+        return;
+      }
       applyFrame(store, frame);
-      const live = frame.seq === undefined || frame.seq > replayCursor;
       chat.ingest(frame, live);
     } catch (error) {
       console.warn('[doty] dropped a malformed event:', error);
@@ -184,26 +216,78 @@ const REACTION: Record<HarnessNotice['kind'], { activity: 'done' | 'error' | 'wa
   attention: { activity: 'waiting_approval', emotion: 'curious', label: 'needs you' },
 };
 
+const NOTICE_LABEL: Record<HarnessNotice['kind'], string> = {
+  done: 'finished',
+  error: 'hit an error',
+  attention: 'needs you',
+};
+
+/**
+ * A watched session finished, errored, or is waiting for the user. React on the
+ * avatar locally and publish the notice (harness + machine + project) so every
+ * connected client shows where it happened.
+ */
 function handleNotice(notice: HarnessNotice): void {
   const reaction = REACTION[notice.kind];
   store.dispatch({ type: 'activity', value: reaction.activity, label: `${notice.harness} ${reaction.label}` });
   store.dispatch({ type: 'emotion', value: reaction.emotion });
-  if (notice.kind !== 'done' || settings.showTaskFinishedBubble) showSpeech(notice);
+  const payload: HarnessNoticePayload = {
+    machine: machineName,
+    harness: notice.harness,
+    sessionId: notice.sessionId,
+    kind: notice.kind,
+    ts: Date.now(),
+    ...(notice.project !== undefined ? { project: notice.project } : {}),
+    ...(notice.title !== undefined ? { title: notice.title } : {}),
+  };
+  renderHarnessNotice(payload, true);
+  void postHarnessNotice(serverUrl, token, payload).catch(() => {
+    // Shown locally regardless; sharing is best-effort.
+  });
 }
 
 /**
  * A watched thread produced an agent response — a final reply or a reasoning
- * block. Show it in Doty's chat, labelled with where it came from. The text is
- * local-only and is never POSTed to the server.
+ * block. Show it locally and publish it so every client sees it.
  */
 function handleResponse(response: HarnessResponse): void {
-  const note = response.project ? `${response.harness} · ${response.project}` : response.harness;
-  chat.addHarnessResponse({
-    key: `${response.harness}:${response.sessionId}:${response.ts}:${response.kind}`,
-    text: response.text,
-    note,
+  const payload: HarnessMessagePayload = {
+    machine: machineName,
+    harness: response.harness,
+    sessionId: response.sessionId,
     kind: response.kind,
+    text: response.text,
+    ts: response.ts,
+    ...(response.project !== undefined ? { project: response.project } : {}),
+    ...(response.title !== undefined ? { title: response.title } : {}),
+  };
+  renderHarnessMessage(payload, true);
+  void postHarnessMessage(serverUrl, token, payload).catch(() => {
+    // Shown locally regardless; sharing is best-effort.
   });
+}
+
+/** Render a shared harness notice once, as a muted status line. */
+function renderHarnessNotice(payload: HarnessNoticePayload, live: boolean): void {
+  const id = harnessEventId(payload.machine, payload.harness, payload.sessionId, payload.ts, payload.kind);
+  if (seenHarness.has(id)) return;
+  seenHarness.add(id);
+  const where = [payload.machine, payload.project ?? payload.title ?? payload.sessionId].join(' · ');
+  chat.addHarnessNotice({
+    id,
+    text: `${payload.harness} ${NOTICE_LABEL[payload.kind]} · ${where}`,
+    notice: payload.kind,
+    live,
+  });
+}
+
+/** Render a shared reasoning block or reply once, labelled with its machine. */
+function renderHarnessMessage(payload: HarnessMessagePayload, live: boolean): void {
+  const id = harnessEventId(payload.machine, payload.harness, payload.sessionId, payload.ts, payload.kind);
+  if (seenHarness.has(id)) return;
+  seenHarness.add(id);
+  const note = [payload.machine, payload.harness, payload.project ?? payload.title ?? payload.sessionId].join(' · ');
+  chat.addHarnessResponse({ key: id, text: payload.text, note, kind: payload.kind, live });
 }
 
 /**
@@ -214,6 +298,11 @@ function handleResponse(response: HarnessResponse): void {
 function handleChatMessage(message: ChatMessage): void {
   const body = bubblePreview(message.text);
   if (!body) return;
+  if (message.notice) {
+    if (message.notice === 'done' && !settings.showTaskFinishedBubble) return;
+    showSpeechText(message.notice, body, 6_000);
+    return;
+  }
   const kind = message.variant === 'reasoning'
     ? 'thinking'
     : message.role === 'user'
@@ -255,10 +344,6 @@ const SPEECH_EDGE = 10;
 const SPEECH_GAP = 10;
 /** Top margin of the bubble inside the expanded window. */
 const SPEECH_TOP = 4;
-
-function showSpeech(notice: HarnessNotice): void {
-  showSpeechText(notice.kind, notice.summary);
-}
 
 function showSpeechText(kind: string, text: string, durationMs = 12_000): void {
   if (!(speech instanceof HTMLElement)) return;

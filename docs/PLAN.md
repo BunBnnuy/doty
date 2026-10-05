@@ -30,7 +30,7 @@ that communicates state, and (b) an agent that runs without you watching.
 | Desktop shell   | **Tauri v2** (Rust + native webview; WebView2 on Windows)       |
 | Local tools     | **Full local bridge, in scope** (M7) — OS control + file access |
 | Harnesses       | **Watch Codex CLI, OpenCode, T3** (M8); Claude Code + DSH later |
-| Harness privacy | **Metadata + client-built digest**; raw content never leaves    |
+| Harness sharing | Reasoning, replies and notices are shared to the server (by decision) |
 | Harness purpose | **Read-only watch + awareness** (no coordination for now)       |
 | Users           | Single-user personal instance                                   |
 | Voice           | Text first; state contract leaves room for voice later          |
@@ -260,12 +260,13 @@ interface HarnessStatus {
 }
 ```
 
-### Privacy: metadata + client-built digest
+### Sharing: metadata, digest, and (by decision) content
 
-The brain is online, but your transcripts are not. Raw `text` **never leaves the
-machine**; the client renders transcripts locally. What crosses the wire is
-metadata plus a **structurally-derived digest** — no LLM needed locally, no code
-sent:
+By explicit product decision, watched-agent **reasoning and replies are shared**:
+the desktop publishes them as `harness_message` / `harness_notice` events so
+every connected client sees where a task ran and what it did. The server also
+stores metadata plus a **structurally-derived digest** — no LLM needed locally,
+no code sent:
 
 ```ts
 interface SessionDigest {
@@ -368,9 +369,10 @@ built early — it does not depend on M7b.
 - **Local bridge** — allowed actions originate from the client's manifest and the
   user's allow-list, never from the model. Confirmation UI is client-rendered;
   the bridge is killable at any moment.
-- **Harness privacy** — raw transcripts never leave the machine. Only metadata +
-  client-built digests are transmitted; content excerpts are opt-in per harness.
-  Watching requires explicit per-harness consent.
+- **Harness sharing** — watched-agent reasoning, replies and finish notices are
+  published to the online brain so all clients see them (explicit product
+  decision). Watching still requires explicit per-harness consent, and secrets
+  are never transmitted.
 - **Harness secrets** — the watcher must never read or transmit
   `~/.t3/userdata/secrets/`, `~/.t3/userdata/clerk-tokens.json`, or
   `~/.local/share/opencode/auth.json`.

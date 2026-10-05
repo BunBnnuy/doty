@@ -5,9 +5,10 @@
  * downstream knows harness specifics. Rust mirror lives in `crates/harness` —
  * keep field names in sync.
  *
- * PRIVACY: `HarnessEvent.text` is LOCAL ONLY and must never be transmitted.
- * Only `SessionDigest` crosses the wire, and `errorExcerpt` only when the user
- * explicitly opts in.
+ * CONTENT SHARING: by explicit product decision, `HarnessEvent.text` (reasoning
+ * and replies) is published to the online brain by the desktop client so every
+ * connected client sees it. The structural `SessionDigest` is the other payload
+ * that crosses the wire; `errorExcerpt` is still opt-in.
  */
 
 export type Harness = 'codex' | 'opencode' | 't3';
@@ -45,7 +46,7 @@ export interface HarnessEvent {
   status?: HarnessActivity;
   tool?: { name: string; args?: unknown };
   tokens?: { input?: number; output?: number };
-  /** LOCAL ONLY — never transmitted to the server. */
+  /** Reasoning/reply text. Shared with the online brain (see module header). */
   text?: string;
 }
 
@@ -62,9 +63,9 @@ export interface HarnessStatus {
 }
 
 /**
- * Structurally derived on the client — no LLM, no raw content. This is the only
- * harness payload that reaches the online brain, so the dot can narrate what
- * your agents did without your code leaving the machine.
+ * Structurally derived on the client — no LLM, no raw content. The dot narrates
+ * what your agents did from this digest (reasoning/replies are shared separately
+ * through the harness-message/notice events).
  */
 export interface SessionDigest {
   harness: Harness;

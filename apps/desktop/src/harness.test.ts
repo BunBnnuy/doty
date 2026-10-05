@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createHarnessStore, latestLineTs, newAssistantLines, newResponseLines, readHarnessStatus } from './harness.js';
+import { createHarnessStore, latestLineTs, newAssistantLines, newResponseLines, readHarnessMessage, readHarnessNotice, readHarnessStatus } from './harness.js';
 
 const sample = { harness: 'codex', sessionId: 'same-id', status: 'thinking', lastActivityAt: 1_000, project: 'C:/repo' };
 describe('local harness read model', () => {
@@ -73,5 +73,26 @@ describe('new assistant responses', () => {
       'thinking:pondering',
       'thinking:still pondering',
     ]);
+  });
+});
+
+describe('shared harness payload readers', () => {
+  const base = { machine: 'PC-A', harness: 'codex', sessionId: 's', kind: 'thinking', text: 'note', ts: 1 };
+
+  it('whitelists a harness message and rejects malformed ones', () => {
+    expect(readHarnessMessage({ ...base, project: 'C:/repo', extra: 'x' }))
+      .toEqual({ machine: 'PC-A', harness: 'codex', sessionId: 's', kind: 'thinking', text: 'note', ts: 1, project: 'C:/repo' });
+    for (const bad of [
+      null, [], { ...base, harness: 'unknown' }, { ...base, kind: 'nope' },
+      { ...base, text: '' }, { ...base, machine: '' }, { ...base, ts: Number.NaN },
+    ]) {
+      expect(readHarnessMessage(bad)).toBeNull();
+    }
+  });
+
+  it('whitelists a harness notice and rejects a bad kind', () => {
+    expect(readHarnessNotice({ machine: 'PC-A', harness: 't3', sessionId: 's', kind: 'done', ts: 2 }))
+      .toEqual({ machine: 'PC-A', harness: 't3', sessionId: 's', kind: 'done', ts: 2 });
+    expect(readHarnessNotice({ machine: 'PC-A', harness: 't3', sessionId: 's', kind: 'nope', ts: 2 })).toBeNull();
   });
 });

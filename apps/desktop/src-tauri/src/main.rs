@@ -58,6 +58,16 @@ fn stub_report() -> StubReport {
     }
 }
 
+/// Best-effort machine name, so shared harness events can say where a task ran.
+#[tauri::command]
+fn device_name() -> String {
+    std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .or_else(|_| std::env::var("USERNAME"))
+        .or_else(|_| std::env::var("USER"))
+        .unwrap_or_else(|_| "unknown".to_string())
+}
+
 // ---------------------------------------------------------------------------
 // Tray icon
 // ---------------------------------------------------------------------------
@@ -184,6 +194,7 @@ fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             stub_report,
+            device_name,
             harness::harness_statuses,
             harness::harness_activity,
             harness::harness_questions,

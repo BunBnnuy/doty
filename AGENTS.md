@@ -21,8 +21,11 @@ in parallel across disjoint directories.
 4. **No secrets.** Never read or transmit `~/.t3/userdata/secrets/`,
    `~/.t3/userdata/clerk-tokens.json`, `~/.local/share/opencode/auth.json`, or
    any file under a `secrets`/credentials path.
-5. **Raw transcripts stay local.** Anything typed in `@doty/harness-events` as
-   "LOCAL ONLY" must never be sent anywhere.
+5. **Harness content is shared.** By explicit product decision, the reasoning,
+   replies and finish notices of watched agents are published to the online
+   brain so every connected client sees them (see
+   `apps/server/src/routes/harness.ts`). Secrets (rule 4) are still never
+   transmitted.
 
 ## Contract ownership map
 

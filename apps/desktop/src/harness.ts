@@ -1,6 +1,7 @@
 /** Local-only harness read model. This module has no server/HTTP dependency. */
 import { mountSatellites, type HarnessStatusSource } from '@doty/avatar';
 import type { Harness, HarnessActivity, HarnessStatus } from '@doty/harness-events';
+import type { HarnessMessagePayload, HarnessNoticePayload } from './api.js';
 
 const HARNESSES: readonly Harness[] = ['codex', 'opencode', 't3'];
 const ACTIVITIES: readonly HarnessActivity[] = [
@@ -91,6 +92,48 @@ function readActivityLine(value: unknown): ActivityLine | null {
     kind: record.kind,
     ...(typeof record.tool === 'string' ? { tool: record.tool } : {}),
     ...(typeof record.text === 'string' ? { text: record.text } : {}),
+  };
+}
+
+/** Shared harness event payloads (published to the server, seen by all clients). */
+export function readHarnessMessage(value: unknown): HarnessMessagePayload | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.machine !== 'string' || !record.machine) return null;
+  if (!(HARNESSES as readonly unknown[]).includes(record.harness)) return null;
+  if (typeof record.sessionId !== 'string' || !record.sessionId) return null;
+  if (record.kind !== 'assistant' && record.kind !== 'thinking') return null;
+  if (typeof record.text !== 'string' || !record.text) return null;
+  if (typeof record.ts !== 'number' || !Number.isFinite(record.ts)) return null;
+  return {
+    machine: record.machine,
+    harness: record.harness as Harness,
+    sessionId: record.sessionId,
+    kind: record.kind,
+    text: record.text,
+    ts: record.ts,
+    ...(typeof record.project === 'string' ? { project: record.project } : {}),
+    ...(typeof record.title === 'string' ? { title: record.title } : {}),
+  };
+}
+
+/** Shared harness event payloads (published to the server, seen by all clients). */
+export function readHarnessNotice(value: unknown): HarnessNoticePayload | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.machine !== 'string' || !record.machine) return null;
+  if (!(HARNESSES as readonly unknown[]).includes(record.harness)) return null;
+  if (typeof record.sessionId !== 'string' || !record.sessionId) return null;
+  if (record.kind !== 'done' && record.kind !== 'error' && record.kind !== 'attention') return null;
+  if (typeof record.ts !== 'number' || !Number.isFinite(record.ts)) return null;
+  return {
+    machine: record.machine,
+    harness: record.harness as Harness,
+    sessionId: record.sessionId,
+    kind: record.kind,
+    ts: record.ts,
+    ...(typeof record.project === 'string' ? { project: record.project } : {}),
+    ...(typeof record.title === 'string' ? { title: record.title } : {}),
   };
 }
 

@@ -12,6 +12,7 @@ import { InMemoryEventLog, type EventLog } from './events/log.js';
 import { registerEventRoutes } from './routes/events.js';
 import { registerHealthRoutes } from './routes/health.js';
 import { registerMessageRoutes } from './routes/message.js';
+import { registerHarnessRoutes } from './routes/harness.js';
 import { AgentRuntime, type AgentRuntimeOptions } from './agent/runtime.js';
 import { createHash, timingSafeEqual } from 'node:crypto';
 
@@ -31,6 +32,9 @@ export interface BuiltApp {
   log: EventLog;
 }
 
+/** Routes that require the shared bearer token when DOTY_TOKEN is set. */
+const GUARDED_ROUTES = new Set(['/message', '/events', '/harness-message', '/harness-notice']);
+
 export function buildApp(options: BuildAppOptions = {}): BuiltApp {
   const log = options.log ?? new InMemoryEventLog();
   const app = Fastify({ logger: options.logger ?? false });
@@ -39,7 +43,7 @@ export function buildApp(options: BuildAppOptions = {}): BuiltApp {
   if (token) {
     app.addHook('onRequest', async (request, reply) => {
       const route = request.routeOptions.url;
-      if (route !== '/message' && route !== '/events') return;
+      if (!route || !GUARDED_ROUTES.has(route)) return;
 
       const authorization = request.headers.authorization;
       const match = authorization?.match(/^Bearer ([^\s]+)$/i);
@@ -54,6 +58,7 @@ export function buildApp(options: BuildAppOptions = {}): BuiltApp {
 
   registerHealthRoutes(app);
   registerEventRoutes(app, log);
+  registerHarnessRoutes(app, log);
   const runtime = options.agent ? new AgentRuntime(options.agent, log) : undefined;
   registerMessageRoutes(app, log, runtime ? (text) => runtime.start(text) : undefined);
   if (runtime) app.addHook('onClose', async () => runtime.close());

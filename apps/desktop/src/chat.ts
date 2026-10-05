@@ -28,6 +28,14 @@ export interface ChatPanel {
     text: string;
     note: string;
     kind?: 'assistant' | 'thinking';
+    live?: boolean;
+  }): void;
+  /** Append a shared watched-session notice (finish / error / needs-you) row. */
+  addHarnessNotice(input: {
+    id: string;
+    text: string;
+    notice: 'done' | 'error' | 'attention';
+    live?: boolean;
   }): void;
   /** Show (or clear) the pending T3 questions pinned at the end of the chat. */
   setPendingQuestions(questions: PendingQuestion[]): void;
@@ -57,6 +65,8 @@ export interface ChatMessage {
   tone?: 'error';
   /** Marks an agent reasoning block, styled apart from a real reply. */
   variant?: 'reasoning';
+  /** Marks a shared watched-session notice row. */
+  notice?: 'done' | 'error' | 'attention';
 }
 
 interface Item {
@@ -70,6 +80,7 @@ interface Item {
   tone?: 'error';
   note?: string;
   variant?: 'reasoning';
+  notice?: 'done' | 'error' | 'attention';
 }
 
 const EMPTY_COPY: Record<Connection, string> = {
@@ -179,6 +190,7 @@ export function mountChat(options: MountChatOptions): ChatPanel {
     text: string;
     note: string;
     kind?: 'assistant' | 'thinking';
+    live?: boolean;
   }): void {
     const text = input.text.trim();
     if (!text || harnessKeys.has(input.key)) return;
@@ -192,7 +204,28 @@ export function mountChat(options: MountChatOptions): ChatPanel {
       afterSeq: options.lastSeq(),
       note: reasoning ? `${input.note} · razonamiento` : input.note,
       ...(reasoning ? { variant: 'reasoning' as const } : {}),
-    });
+    }, input.live ?? true);
+  }
+
+  /** A shared watched-session notice, rendered as a muted status line. */
+  function addHarnessNotice(input: {
+    id: string;
+    text: string;
+    notice: 'done' | 'error' | 'attention';
+    live?: boolean;
+  }): void {
+    const text = input.text.trim();
+    if (!text || harnessKeys.has(input.id)) return;
+    harnessKeys.add(input.id);
+    pushItem({
+      id: `harness-notice-${input.id}`,
+      role: 'run',
+      text,
+      status: 'sent',
+      afterSeq: options.lastSeq(),
+      notice: input.notice,
+      ...(input.notice === 'error' ? { tone: 'error' as const } : {}),
+    }, input.live ?? true);
   }
 
   /** Rebuild the pending-question rows, pinned after the newest message. */
@@ -247,6 +280,7 @@ export function mountChat(options: MountChatOptions): ChatPanel {
         ...(item.note !== undefined ? { note: item.note } : {}),
         ...(item.tone !== undefined ? { tone: item.tone } : {}),
         ...(item.variant !== undefined ? { variant: item.variant } : {}),
+        ...(item.notice !== undefined ? { notice: item.notice } : {}),
       });
     }
     return item;
@@ -254,7 +288,7 @@ export function mountChat(options: MountChatOptions): ChatPanel {
 
   function renderItem(item: Item): HTMLLIElement {
     const element = document.createElement('li');
-    element.className = `msg msg-${item.role}${item.tone === 'error' ? ' is-error' : ''}${item.variant === 'reasoning' ? ' is-reasoning' : ''}`;
+    element.className = `msg msg-${item.role}${item.tone === 'error' ? ' is-error' : ''}${item.variant === 'reasoning' ? ' is-reasoning' : ''}${item.notice ? ` is-notice-${item.notice}` : ''}`;
     element.dataset.status = item.status;
     if (item.seq !== undefined) element.dataset.seq = String(item.seq);
 
@@ -441,7 +475,7 @@ export function mountChat(options: MountChatOptions): ChatPanel {
     renderQuestions();
   }
 
-  return { ingest, addHarnessResponse, setPendingQuestions, setConnection, clear, flush, forgetHistory, showAuthError };
+  return { ingest, addHarnessResponse, addHarnessNotice, setPendingQuestions, setConnection, clear, flush, forgetHistory, showAuthError };
 }
 
 function statusLabel(status: Item['status']): string {

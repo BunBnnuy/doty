@@ -6,6 +6,8 @@
  * `ts` may be present here (it is a stored record) but is never required.
  */
 
+import type { Harness } from '@doty/harness-events';
+
 export const DEFAULT_SERVER = 'https://doty.killbunny.top';
 
 const STORAGE_KEY = 'doty.server';
@@ -145,6 +147,71 @@ export async function postMessage(
   } catch {
     return undefined;
   }
+}
+
+/** One reasoning block or final reply captured from a watched session. */
+export interface HarnessMessagePayload {
+  machine: string;
+  harness: Harness;
+  sessionId: string;
+  project?: string;
+  title?: string;
+  kind: 'assistant' | 'thinking';
+  text: string;
+  ts: number;
+}
+
+/** A watched session finished, errored, or is waiting for the user. */
+export interface HarnessNoticePayload {
+  machine: string;
+  harness: Harness;
+  sessionId: string;
+  project?: string;
+  title?: string;
+  kind: 'done' | 'error' | 'attention';
+  ts: number;
+}
+
+/** Publish a watched agent's reasoning/reply so every client sees it. */
+export async function postHarnessMessage(
+  serverUrl: string,
+  token: string | null,
+  payload: HarnessMessagePayload,
+  signal?: AbortSignal,
+): Promise<void> {
+  await postJson(serverUrl, '/harness-message', token, payload, signal);
+}
+
+/** Publish a watched agent's finish/error/attention notice to every client. */
+export async function postHarnessNotice(
+  serverUrl: string,
+  token: string | null,
+  payload: HarnessNoticePayload,
+  signal?: AbortSignal,
+): Promise<void> {
+  await postJson(serverUrl, '/harness-notice', token, payload, signal);
+}
+
+async function postJson(
+  serverUrl: string,
+  path: string,
+  token: string | null,
+  body: unknown,
+  signal?: AbortSignal,
+): Promise<void> {
+  const response = await fetch(commandUrl(serverUrl, path), {
+    method: 'POST',
+    headers: {
+      accept: 'application/json',
+      'content-type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(body),
+    cache: 'no-store',
+    credentials: 'omit',
+    signal,
+  });
+  if (!response.ok) throw new HttpError(`POST ${path} failed: ${response.status}`, response.status);
 }
 
 function commandUrl(base: string, path: string): string {
