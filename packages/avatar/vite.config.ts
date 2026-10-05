@@ -14,4 +14,9 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
   },
+  build: {
+    // Static demo output, kept separate from the `dist/` library build (tsc).
+    outDir: 'demo-dist',
+    emptyOutDir: true,
+  },
 });
