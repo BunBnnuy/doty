@@ -196,6 +196,7 @@ export function startDiscordBot(options: DiscordBotOptions): DiscordBot {
     if (event === 'READY') {
       const user = asRecord(asRecord(data)?.user);
       if (typeof user?.id === 'string') botUserId = user.id;
+      reconnectDelay = 1_000;
       log(`discord: ready as ${typeof user?.username === 'string' ? user.username : 'bot'}`);
       return;
     }
@@ -286,13 +287,14 @@ export function startDiscordBot(options: DiscordBotOptions): DiscordBot {
     const ws = new WebSocket(GATEWAY_URL);
     socket = ws;
     ws.addEventListener('open', () => {
-      reconnectDelay = 1_000;
+      log('discord: gateway socket open');
     });
     ws.addEventListener('message', (event: MessageEvent) => {
       if (typeof event.data === 'string') onPayload(event.data);
     });
-    ws.addEventListener('close', () => {
+    ws.addEventListener('close', (event: CloseEvent) => {
       stopHeartbeat();
+      log(`discord: gateway closed (code ${event.code})`);
       scheduleReconnect();
     });
     ws.addEventListener('error', () => {
