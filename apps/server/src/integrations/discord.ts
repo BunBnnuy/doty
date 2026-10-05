@@ -27,6 +27,8 @@ export interface DiscordBotOptions {
   channelId?: string;
   /** In guilds without a fixed channel, only answer when mentioned. Default true. */
   mentionOnly?: boolean;
+  /** Request the privileged MESSAGE_CONTENT intent. Default true. */
+  messageContent?: boolean;
   /** Produce the reply text for an incoming message (runs the agent). */
   handle: (text: string, context: DiscordMessageContext) => Promise<string | undefined>;
   /** Metadata-only logger; never pass message content. */
@@ -39,12 +41,14 @@ export interface DiscordBot {
 
 const GATEWAY_URL = 'wss://gateway.discord.gg/?v=10&encoding=json';
 const API_BASE = 'https://discord.com/api/v10';
-// GUILD_MESSAGES | DIRECT_MESSAGES | MESSAGE_CONTENT
-const INTENTS = (1 << 9) | (1 << 12) | (1 << 15);
+// GUILD_MESSAGES | DIRECT_MESSAGES
+const BASE_INTENTS = (1 << 9) | (1 << 12);
+// MESSAGE_CONTENT is privileged and must be enabled in the developer portal.
+const MESSAGE_CONTENT_INTENT = 1 << 15;
 const USER_AGENT = 'Doty (https://github.com/BunBnnuy/doty, 0.1)';
 
-export function discordIntents(): number {
-  return INTENTS;
+export function discordIntents(includeMessageContent = true): number {
+  return BASE_INTENTS | (includeMessageContent ? MESSAGE_CONTENT_INTENT : 0);
 }
 
 /** Parse `DISCORD_ALLOWED_USER_IDS` (comma-separated) into a set. */
@@ -142,6 +146,7 @@ export function startDiscordBot(options: DiscordBotOptions): DiscordBot {
   let reconnectDelay = 1000;
   let lastSeq: number | null = null;
   let botUserId: string | undefined;
+  let includeMessageContent = options.messageContent ?? true;
 
   const authHeaders: Record<string, string> = {
     Authorization: `Bot ${options.token}`,
@@ -214,7 +219,7 @@ export function startDiscordBot(options: DiscordBotOptions): DiscordBot {
       op: 2,
       d: {
         token: options.token,
-        intents: INTENTS,
+        intents: discordIntents(includeMessageContent),
         properties: { os: process.platform, browser: 'doty', device: 'doty' },
       },
     }));
@@ -295,6 +300,11 @@ export function startDiscordBot(options: DiscordBotOptions): DiscordBot {
     ws.addEventListener('close', (event: CloseEvent) => {
       stopHeartbeat();
       log(`discord: gateway closed (code ${event.code})`);
+      if (event.code === 4014 && includeMessageContent) {
+        includeMessageContent = false;
+        reconnectDelay = 1_000;
+        log('discord: MESSAGE CONTENT intent not enabled; retrying without it (DMs and mentions still work; enable it in the portal for full guild content)');
+      }
       scheduleReconnect();
     });
     ws.addEventListener('error', () => {

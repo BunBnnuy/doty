@@ -21,6 +21,7 @@ const msg = (over: Partial<IncomingMessage> = {}): IncomingMessage => ({
 describe('discord helpers', () => {
   it('requests the message-content intents', () => {
     expect(discordIntents()).toBe((1 << 9) | (1 << 12) | (1 << 15));
+    expect(discordIntents(false)).toBe((1 << 9) | (1 << 12));
   });
 
   it('parses a comma-separated allow-list', () => {
