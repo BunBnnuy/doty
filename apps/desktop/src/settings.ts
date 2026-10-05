@@ -27,7 +27,7 @@ export const AUTO_CLOSE_RANGE = { min: 0, max: 600 } as const;
 const KEY = 'doty.settings';
 
 export const DEFAULT_SETTINGS: DotySettings = {
-  serverUrl: 'http://localhost:8787',
+  serverUrl: 'https://doty.killbunny.top',
   orbitSize: 150,
   orbitalSize: 17,
   dotySize: 76,

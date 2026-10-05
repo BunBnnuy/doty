@@ -6,7 +6,7 @@
  * `ts` may be present here (it is a stored record) but is never required.
  */
 
-export const DEFAULT_SERVER = 'http://localhost:8787';
+export const DEFAULT_SERVER = 'https://doty.killbunny.top';
 
 const STORAGE_KEY = 'doty.server';
 const TOKEN_STORAGE_KEY = 'doty.token';
