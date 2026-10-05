@@ -19,6 +19,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::Serialize;
+mod harness;
 use tauri::{
     image::Image,
     menu::{Menu, MenuItem},
@@ -178,13 +179,22 @@ fn report_stub(name: &str, detail: &str) {
 
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![stub_report])
+        .invoke_handler(tauri::generate_handler![
+            stub_report,
+            harness::harness_statuses
+        ])
         .setup(|app| {
             install_tray(app)?;
             install_stubs(app.handle());
+            app.manage(harness::HarnessWatchers::start(app.handle().clone()));
             println!("[doty] desktop shell ready");
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running Doty desktop");
+        .build(tauri::generate_context!())
+        .expect("error while building Doty desktop")
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                app.state::<harness::HarnessWatchers>().stop();
+            }
+        });
 }

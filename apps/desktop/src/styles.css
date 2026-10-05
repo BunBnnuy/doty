@@ -37,6 +37,7 @@ body {
 
 #presence {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   flex: 0 0 auto;
@@ -47,12 +48,15 @@ body {
 
 #avatar-slot {
   position: relative;
-  width: 76px;
-  height: 76px;
+  width: 136px;
+  height: 136px;
   flex: 0 0 auto;
 }
 
 #avatar {
+  position: absolute;
+  left: calc(50% - 38px);
+  top: calc(50% - 38px);
   width: 76px;
   height: 76px;
   overflow: visible;
@@ -64,8 +68,39 @@ body {
 
 .drag-catch {
   position: absolute;
-  inset: 0;
+  left: calc(50% - 38px);
+  top: calc(50% - 38px);
+  width: 76px;
+  height: 76px;
 }
+
+#harness-summary {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+#harness-details {
+  flex: 0 1 auto;
+  max-height: 165px;
+  overflow-y: auto;
+  margin: 0 8px 8px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.25);
+  font-size: 11px;
+  user-select: text;
+}
+
+#harness-details[hidden] { display: none; }
+.harness-heading { display: flex; align-items: center; justify-content: space-between; }
+#harness-close { padding: 1px 6px; background: transparent; font-size: 16px; }
+#harness-fields { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 8px; margin: 6px 0; }
+#harness-fields dt { color: var(--muted); }
+#harness-fields dd { margin: 0; overflow-wrap: anywhere; }
+.harness-privacy { margin: 6px 0 0; color: var(--muted); font-size: 10px; }
 
 #presence-meta {
   min-width: 0;

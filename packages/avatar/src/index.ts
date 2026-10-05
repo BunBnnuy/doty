@@ -327,3 +327,6 @@ export function mountAvatar(
 }
 
 export type { DotState } from '@doty/dot-state';
+// Additive layer; the character renderer and mountAvatar contract stay untouched.
+export { mountSatellites } from './satellites.js';
+export type { HarnessStatusSource, SatellitesHandle, SatellitesOptions } from './satellites.js';

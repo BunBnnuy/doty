@@ -12,6 +12,7 @@ import { postMessage, rememberServerUrl, resolveServerUrl } from './api.js';
 import { mountChat } from './chat.js';
 import { openEventStream, type StreamStatus } from './sse.js';
 import { applyFrame } from './wire.js';
+import { mountHarnessTeam } from './harness.js';
 
 const avatarHost = document.getElementById('avatar');
 const label = document.getElementById('label');
@@ -27,6 +28,8 @@ store.dispatch({ type: 'connection', value: 'reconnecting' });
 
 const avatar = mountAvatar(avatarHost, store, { size: 76 });
 avatar.element.setAttribute('data-tauri-drag-region', '');
+const avatarSlot = document.getElementById('avatar-slot');
+const harnessTeam = avatarSlot instanceof HTMLElement ? mountHarnessTeam(avatarSlot) : undefined;
 
 let serverUrl = resolveServerUrl();
 let fallback = false;
@@ -112,6 +115,7 @@ function disengageFallback(): void {
 window.addEventListener('beforeunload', () => {
   stream?.stop();
   stopDriver?.();
+  harnessTeam?.destroy();
   avatar.destroy();
 });
 

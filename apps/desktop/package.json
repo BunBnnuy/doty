@@ -11,6 +11,7 @@
   "dependencies": {
     "@doty/avatar": "*",
     "@doty/dot-state": "*",
+    "@doty/harness-events": "*",
     "@tauri-apps/api": "^2.12.1"
   }
 }
