@@ -134,9 +134,14 @@ export class OpenAIChatProvider implements ChatProvider {
       }),
     });
     if (!response.ok) {
-      await response.body?.cancel();
-      // Do not expose upstream response bodies: they can contain credentials.
-      throw new Error(`Chat provider HTTP ${response.status}`);
+      let detail = '';
+      try {
+        // Bounded upstream error body (never the request headers/credentials).
+        detail = (await response.text()).slice(0, 300).replace(/\s+/g, ' ').trim();
+      } catch {
+        await response.body?.cancel().catch(() => undefined);
+      }
+      throw new Error(`Chat provider HTTP ${response.status}${detail ? `: ${detail}` : ''}`);
     }
     if (!response.body) throw new Error('Chat provider returned no stream');
 

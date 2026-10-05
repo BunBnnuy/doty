@@ -6,7 +6,7 @@ import type { ChatMessage, ChatProvider, ProviderRequest } from '../provider/typ
 import { ToolRegistry } from '../tools/registry.js';
 import { nowTool } from '../tools/now.js';
 import type { Tool } from '../tools/types.js';
-import { runAgent } from './loop.js';
+import { runAgent, MAX_OBSERVATION_CHARS } from './loop.js';
 
 type Assistant = Extract<ChatMessage, { role: 'assistant' }>;
 const call: Assistant = { role: 'assistant', content: '', toolCalls: [{ id: 'call_1', name: 'now', arguments: '{}' }] };
@@ -53,6 +53,25 @@ describe('agent loop (mock provider, no network)', () => {
     ]);
     expect(live.every((event) => (event.data as { runId: string }).runId === 'test-run')).toBe(true);
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('truncates a large tool observation before it reaches the model', async () => {
+    const huge: Tool = {
+      name: 'huge',
+      description: 'returns a large result',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+      tier: 'read',
+      async run() { return { blob: 'x'.repeat(50_000) }; },
+    };
+    const hugeCall: Assistant = { role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 'huge', arguments: '{}' }] };
+    const provider = new MockProvider([hugeCall, { role: 'assistant', content: 'ok' }]);
+    const log = new InMemoryEventLog();
+    const result = await runAgent({ task: 'go', provider, tools: new ToolRegistry([huge]), log });
+    expect(result.status).toBe('completed');
+    const toolMessage = provider.requests[1]!.messages.at(-1)!;
+    expect(toolMessage.content.length).toBeLessThanOrEqual(MAX_OBSERVATION_CHARS + 40);
+    const event = log.since(0).find((item) => item.type === 'observation');
+    expect((event?.data as { observation: { truncated?: boolean } }).observation.truncated).toBe(true);
   });
 
   it('bounds model turns and emits max_steps instead of inventing a final answer', async () => {
