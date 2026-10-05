@@ -5,34 +5,55 @@
  * While `GET /events` is live, server frames drive that same store. When the
  * server is unreachable the fake driver keeps the dot alive and the composer
  * queues outgoing text until the stream returns.
+ *
+ * The local harness watcher feeds the satellites AND, when a session finishes
+ * or needs the user, a speech bubble plus an avatar reaction.
  */
 import { mountAvatar } from '@doty/avatar';
 import { createDotStore, startFakeDriver, type Connection, type DotStore } from '@doty/dot-state';
-import { postMessage, rememberServerUrl, resolveServerUrl, resolveToken } from './api.js';
+import { postMessage, resolveToken } from './api.js';
 import { mountChat } from './chat.js';
 import { openEventStream, type StreamStatus } from './sse.js';
 import { applyFrame } from './wire.js';
-import { mountHarnessTeam } from './harness.js';
+import { mountHarnessTeam, type HarnessNotice, type HarnessTeamOptions } from './harness.js';
+import {
+  DOTY_RANGE,
+  ORBIT_RANGE,
+  loadSettings,
+  normalizeSettings,
+  saveSettings,
+  type DotySettings,
+} from './settings.js';
 
 const avatarHost = document.getElementById('avatar');
+const avatarSlot = document.getElementById('avatar-slot');
 const label = document.getElementById('label');
 const connectionEl = document.getElementById('connection');
 const app = document.getElementById('app');
 const stage = document.getElementById('stage');
+const speech = document.getElementById('speech');
 
-if (!(avatarHost instanceof HTMLElement)) {
-  throw new Error('Doty webview: #avatar element is missing from index.html');
+if (!(avatarHost instanceof HTMLElement) || !(avatarSlot instanceof HTMLElement)) {
+  throw new Error('Doty webview: #avatar / #avatar-slot missing from index.html');
 }
+const avatarMount: HTMLElement = avatarHost;
+const slotMount: HTMLElement = avatarSlot;
+
+let settings: DotySettings = loadSettings();
 
 const store = createDotStore();
 store.dispatch({ type: 'connection', value: 'reconnecting' });
 
-const avatar = mountAvatar(avatarHost, store, { size: 76 });
-const avatarSlot = document.getElementById('avatar-slot');
-const harnessTeam = avatarSlot instanceof HTMLElement ? mountHarnessTeam(avatarSlot) : undefined;
+const harnessOptions = (): HarnessTeamOptions => ({
+  orbitSize: settings.orbitSize,
+  onNotice: handleNotice,
+});
 
-let serverUrl = resolveServerUrl();
+let avatar = mountAvatar(avatarMount, store, { size: settings.dotySize });
+let harnessTeam = mountHarnessTeam(slotMount, harnessOptions());
+
 const token = resolveToken();
+let serverUrl = settings.serverUrl;
 let fallback = false;
 let stopDriver: (() => void) | undefined;
 
@@ -44,7 +65,6 @@ store.subscribe((state) => {
     connectionEl.textContent = connection;
     connectionEl.dataset.connection = connection;
   }
-  // The fake driver's `reset` step clears the client-owned connection field.
   if (fallback && state.connection !== 'offline') {
     store.dispatch({ type: 'connection', value: 'offline' });
   }
@@ -56,11 +76,8 @@ const chat = mountChat({
   serverUrl,
   lastSeq: () => stream?.lastSeq() ?? 0,
   send: (text) => postMessage(serverUrl, text, token),
-  onServerUrl(next) {
-    rememberServerUrl(next);
-    if (next === serverUrl) return;
-    serverUrl = next;
-    stream?.restart();
+  onServerUrl() {
+    // Server changes go through the settings view.
   },
 });
 
@@ -108,30 +125,130 @@ function engageFallback(): void {
 
 function disengageFallback(): void {
   if (!fallback) return;
-  // Clear the flag before `reset`, or the subscriber would force offline again.
   fallback = false;
   stopDriver?.();
   stopDriver = undefined;
   store.dispatch({ type: 'reset' });
 }
 
-window.addEventListener('beforeunload', () => {
-  stream?.stop();
-  stopDriver?.();
-  harnessTeam?.destroy();
-  avatar.destroy();
+// ---------------------------------------------------------------------------
+// Session notices: speech bubble + avatar reaction
+// ---------------------------------------------------------------------------
+
+const REACTION: Record<HarnessNotice['kind'], { activity: 'done' | 'error' | 'waiting_approval'; emotion: 'happy' | 'concerned' | 'curious'; label: string }> = {
+  done: { activity: 'done', emotion: 'happy', label: 'finished' },
+  error: { activity: 'error', emotion: 'concerned', label: 'hit an error' },
+  attention: { activity: 'waiting_approval', emotion: 'curious', label: 'needs you' },
+};
+
+function handleNotice(notice: HarnessNotice): void {
+  const reaction = REACTION[notice.kind];
+  store.dispatch({ type: 'activity', value: reaction.activity, label: `${notice.harness} ${reaction.label}` });
+  store.dispatch({ type: 'emotion', value: reaction.emotion });
+  showSpeech(notice);
+}
+
+let speechTimer = 0;
+function showSpeech(notice: HarnessNotice): void {
+  if (!(speech instanceof HTMLElement)) return;
+  speech.dataset.kind = notice.kind;
+  speech.textContent = notice.summary;
+  speech.hidden = false;
+  window.clearTimeout(speechTimer);
+  speechTimer = window.setTimeout(() => {
+    if (speech instanceof HTMLElement) speech.hidden = true;
+  }, 12_000);
+}
+
+speech?.addEventListener('click', () => {
+  if (speech instanceof HTMLElement) speech.hidden = true;
+  void setPanelOpen(true);
 });
 
-// Optional: report the state of the OS-integration stubs from the Rust side.
-// Guarded so the same bundle also runs in a plain browser (`vite dev`).
-declare global {
-  interface Window {
-    __TAURI_INTERNALS__?: unknown;
+// ---------------------------------------------------------------------------
+// Settings view
+// ---------------------------------------------------------------------------
+
+const settingsToggle = document.getElementById('settings-toggle');
+const settingsClose = document.getElementById('settings-close');
+const settingsPanel = document.getElementById('settings');
+const chatPanel = document.getElementById('panel');
+const serverField = document.getElementById('setting-server');
+const orbitField = document.getElementById('setting-orbit');
+const dotyField = document.getElementById('setting-doty');
+const orbitValue = document.getElementById('setting-orbit-value');
+const dotyValue = document.getElementById('setting-doty-value');
+
+function showSettings(show: boolean): void {
+  if (settingsPanel instanceof HTMLElement) settingsPanel.hidden = !show;
+  if (chatPanel instanceof HTMLElement) chatPanel.hidden = show;
+  if (show) void setPanelOpen(true);
+}
+
+function applySettings(next: DotySettings): void {
+  const previous = settings;
+  settings = normalizeSettings(next);
+  saveSettings(settings);
+
+  if (settings.dotySize !== previous.dotySize) {
+    avatar.destroy();
+    avatar = mountAvatar(avatarMount, store, { size: settings.dotySize });
+  }
+  if (settings.orbitSize !== previous.orbitSize) {
+    harnessTeam.destroy();
+    harnessTeam = mountHarnessTeam(slotMount, harnessOptions());
+  }
+  if (settings.serverUrl !== previous.serverUrl) {
+    serverUrl = settings.serverUrl;
+    stream?.restart();
   }
 }
 
+function syncSettingFields(): void {
+  if (serverField instanceof HTMLInputElement) serverField.value = settings.serverUrl;
+  if (orbitField instanceof HTMLInputElement) {
+    orbitField.min = String(ORBIT_RANGE.min);
+    orbitField.max = String(ORBIT_RANGE.max);
+    orbitField.value = String(settings.orbitSize);
+  }
+  if (dotyField instanceof HTMLInputElement) {
+    dotyField.min = String(DOTY_RANGE.min);
+    dotyField.max = String(DOTY_RANGE.max);
+    dotyField.value = String(settings.dotySize);
+  }
+  if (orbitValue) orbitValue.textContent = String(settings.orbitSize);
+  if (dotyValue) dotyValue.textContent = String(settings.dotySize);
+}
+syncSettingFields();
+
+settingsToggle?.addEventListener('click', () => {
+  const hidden = settingsPanel instanceof HTMLElement ? settingsPanel.hidden : true;
+  showSettings(Boolean(hidden));
+});
+settingsClose?.addEventListener('click', () => showSettings(false));
+
+serverField?.addEventListener('change', () => {
+  if (serverField instanceof HTMLInputElement) applySettings({ ...settings, serverUrl: serverField.value });
+});
+orbitField?.addEventListener('input', () => {
+  if (orbitField instanceof HTMLInputElement && orbitValue) orbitValue.textContent = orbitField.value;
+});
+orbitField?.addEventListener('change', () => {
+  if (orbitField instanceof HTMLInputElement) applySettings({ ...settings, orbitSize: Number(orbitField.value) });
+});
+dotyField?.addEventListener('input', () => {
+  if (dotyField instanceof HTMLInputElement && dotyValue) dotyValue.textContent = dotyField.value;
+});
+dotyField?.addEventListener('change', () => {
+  if (dotyField instanceof HTMLInputElement) applySettings({ ...settings, dotySize: Number(dotyField.value) });
+});
+
+// ---------------------------------------------------------------------------
+// Window: collapse/expand + dragging
+// ---------------------------------------------------------------------------
+
 const COLLAPSED = { width: 220, height: 220 };
-const PANEL = { width: 360, height: 520 };
+const PANEL = { width: 380, height: 560 };
 const EDGE = 8;
 const CHAR_ANCHOR = 72;
 let panelOpen = false;
@@ -145,6 +262,7 @@ async function setPanelOpen(open: boolean): Promise<void> {
   if (open === panelOpen) return;
   panelOpen = open;
   app?.classList.toggle('collapsed', !open);
+  if (!open) showSettings(false);
 
   if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
     if (open) document.getElementById('composer-input')?.focus();
@@ -171,7 +289,6 @@ async function setPanelOpen(open: boolean): Promise<void> {
     const anchor = CHAR_ANCHOR * scale;
 
     if (!open) {
-      // Collapse: keep the character where it is on screen.
       const cx = charScreen ? charScreen.x : pos.x + cur.width / 2;
       const cy = charScreen ? charScreen.y : pos.y + cur.height / 2;
       const left = clamp(cx - cw / 2, mon.x + edge, mon.x + mon.w - cw - edge);
@@ -183,14 +300,13 @@ async function setPanelOpen(open: boolean): Promise<void> {
       return;
     }
 
-    // Expand: keep the character fixed and grow the panel into the emptier side.
     const charX = charScreen ? charScreen.x : pos.x + cur.width / 2;
     const charY = charScreen ? charScreen.y : pos.y + cur.height / 2;
     const roomDown = mon.y + mon.h - charY;
     const roomUp = charY - mon.y;
     const goDown = roomDown >= roomUp;
     const avail = (goDown ? roomDown : roomUp) + anchor - edge;
-    const height = Math.round(Math.min(ph, Math.max(260 * scale, avail)));
+    const height = Math.round(Math.min(ph, Math.max(280 * scale, avail)));
 
     app?.classList.toggle('upward', !goDown);
 
@@ -220,7 +336,6 @@ if (IS_TAURI) {
       console.warn('[doty] could not read stub_report:', error);
     });
 
-  // Character: drag to move the window, a plain click toggles the chat panel.
   void import('@tauri-apps/api/window')
     .then(({ getCurrentWindow }) => {
       stage?.addEventListener('mousedown', (event) => {
@@ -249,7 +364,6 @@ if (IS_TAURI) {
         window.addEventListener('mouseup', onUp);
       });
 
-      // The expanded header doubles as a drag handle (its controls excepted).
       document.getElementById('presence')?.addEventListener('mousedown', (event) => {
         const target = event.target;
         if (target instanceof Element && target.closest('input, textarea, select, button, a, summary')) {
@@ -262,6 +376,12 @@ if (IS_TAURI) {
       // Tauri window API unavailable.
     });
 } else {
-  // Plain browser (vite dev): a click toggles the panel.
   stage?.addEventListener('click', () => void setPanelOpen(!panelOpen));
 }
+
+window.addEventListener('beforeunload', () => {
+  stream?.stop();
+  stopDriver?.();
+  harnessTeam.destroy();
+  avatar.destroy();
+});

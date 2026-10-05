@@ -53,8 +53,8 @@ export function mountChat(options: MountChatOptions): ChatPanel {
   const empty = requireElement<HTMLElement>('empty');
   const composer = requireElement<HTMLFormElement>('composer');
   const input = requireElement<HTMLInputElement>('composer-input');
-  const serverForm = requireElement<HTMLFormElement>('server-form');
-  const serverInput = requireElement<HTMLInputElement>('server-url');
+  const serverForm = document.getElementById('server-form');
+  const serverInput = document.getElementById('server-url');
   const serverDetails = document.getElementById('server-settings');
 
   const items: Item[] = [];
@@ -66,7 +66,7 @@ export function mountChat(options: MountChatOptions): ChatPanel {
   let connection: Connection = 'reconnecting';
   let activeServer = options.serverUrl;
 
-  serverInput.value = options.serverUrl;
+  if (serverInput instanceof HTMLInputElement) serverInput.value = options.serverUrl;
   renderEmpty();
 
   // Markdown links must not navigate the app window away.
@@ -84,28 +84,30 @@ export function mountChat(options: MountChatOptions): ChatPanel {
     void sendOutgoing(text);
   });
 
-  serverInput.addEventListener('input', () => {
-    serverInput.setCustomValidity('');
-  });
+  if (serverForm instanceof HTMLFormElement && serverInput instanceof HTMLInputElement) {
+    serverInput.addEventListener('input', () => {
+      serverInput.setCustomValidity('');
+    });
 
-  serverForm.addEventListener('submit', (event) => {
-    event.preventDefault();
-    const next = normalizeServerUrl(serverInput.value);
-    if (!next) {
-      serverInput.setCustomValidity('Enter an http(s) server URL');
-      serverInput.reportValidity();
-      return;
-    }
-    serverInput.setCustomValidity('');
-    serverInput.value = next;
-    if (next === activeServer) {
+    serverForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const next = normalizeServerUrl(serverInput.value);
+      if (!next) {
+        serverInput.setCustomValidity('Enter an http(s) server URL');
+        serverInput.reportValidity();
+        return;
+      }
+      serverInput.setCustomValidity('');
+      serverInput.value = next;
+      if (next === activeServer) {
+        options.onServerUrl(next);
+        return;
+      }
+      activeServer = next;
+      clear();
       options.onServerUrl(next);
-      return;
-    }
-    activeServer = next;
-    clear();
-    options.onServerUrl(next);
-  });
+    });
+  }
 
   function renderEmpty(): void {
     const show = items.length === 0;

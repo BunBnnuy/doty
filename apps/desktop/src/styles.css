@@ -473,3 +473,82 @@ button:hover {
 .ha-text { flex: 1 1 auto; color: var(--ink); white-space: pre-wrap; }
 .ha-time { flex: 0 0 auto; color: var(--muted); font-size: 10px; }
 .ha-empty { color: var(--muted); font-size: 12px; }
+
+/* Speech bubble for session notices. */
+#stage { position: relative; }
+#speech {
+  position: absolute;
+  top: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 210px;
+  padding: 6px 9px;
+  border-radius: 10px;
+  background: rgba(20, 18, 32, 0.95);
+  border: 1px solid var(--line);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  font-size: 11.5px;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  color: var(--ink);
+  z-index: 5;
+  pointer-events: auto;
+  cursor: pointer;
+}
+#speech[hidden] { display: none; }
+#speech::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -6px;
+  width: 10px;
+  height: 10px;
+  transform: translateX(-50%) rotate(45deg);
+  background: inherit;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+#speech[data-kind="done"] { border-color: rgba(134, 239, 172, 0.5); }
+#speech[data-kind="error"] { border-color: rgba(255, 133, 133, 0.65); }
+#speech[data-kind="attention"] { border-color: rgba(255, 202, 104, 0.65); }
+
+/* Settings view. */
+#settings-toggle {
+  margin-left: auto;
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+#settings {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+}
+#panel[hidden],
+#settings[hidden],
+#app.collapsed #settings { display: none; }
+.settings-head { display: flex; align-items: center; justify-content: space-between; }
+.settings-head strong { font-size: 14px; }
+#settings-close { border: 0; background: transparent; color: var(--ink); font-size: 18px; cursor: pointer; }
+.setting {
+  display: grid;
+  grid-template-columns: 84px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.setting input[type="url"] { grid-column: 1 / -1; width: 100%; }
+.setting input[type="range"] { width: 100%; padding: 0; }
+.setting output { font-variant-numeric: tabular-nums; color: var(--ink); min-width: 30px; text-align: right; }
+.settings-note { margin: 4px 0 0; font-size: 11px; color: var(--muted); }

@@ -9,6 +9,22 @@ const ACTIVITIES: readonly HarnessActivity[] = [
 const RECENT_MS = 10 * 60_000;
 const ACTIVE = new Set<HarnessActivity>(['running', 'thinking', 'tool_calling', 'waiting_approval']);
 
+/** A session finished or needs the user. Built locally; nothing leaves the device. */
+export interface HarnessNotice {
+  kind: 'done' | 'error' | 'attention';
+  harness: Harness;
+  sessionId: string;
+  project?: string;
+  title?: string;
+  summary: string;
+}
+
+export interface HarnessTeamOptions {
+  /** Square orbit area for the satellites, in CSS pixels. */
+  orbitSize?: number;
+  onNotice?: (notice: HarnessNotice) => void;
+}
+
 /** Whitelist metadata even if a malformed/native payload contains text/tool args. */
 export function readHarnessStatus(value: unknown): HarnessStatus | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
@@ -103,14 +119,25 @@ export function createHarnessStore() {
 
 const sessionKey = (harness: Harness, sessionId: string): string => JSON.stringify([harness, sessionId]);
 
-export function mountHarnessTeam(container: HTMLElement): { destroy(): void } {
+function oneLine(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}
+
+export function mountHarnessTeam(
+  container: HTMLElement,
+  options: HarnessTeamOptions = {},
+): { destroy(): void } {
   const store = createHarnessStore();
+  const base = Math.max(96, Math.round(options.orbitSize ?? 150));
   const panel = document.getElementById('harness-details');
   const details = document.getElementById('harness-fields');
   const activityEl = document.getElementById('harness-activity');
   const summary = document.getElementById('harness-summary');
   const close = document.getElementById('harness-close');
   const activity = new Map<string, ActivityLine[]>();
+  const lastActivity = new Map<string, HarnessActivity>();
+  const notified = new Set<string>();
   let selected: HarnessStatus | undefined;
   let destroyed = false;
   let unlisten: (() => void) | undefined;
@@ -121,6 +148,56 @@ export function mountHarnessTeam(container: HTMLElement): { destroy(): void } {
     activity.set(sessionKey(batch.harness, batch.sessionId), batch.events);
     if (selected && selected.harness === batch.harness && selected.sessionId === batch.sessionId) {
       renderActivity(selected);
+    }
+  }
+
+  /** Structural summary: no LLM, no content leaves the device. */
+  function summarize(status: HarnessStatus): string {
+    const lines = activity.get(sessionKey(status.harness, status.sessionId)) ?? [];
+    const tools = new Map<string, number>();
+    let lastAssistant = '';
+    let lastUser = '';
+    for (const line of lines) {
+      if (line.kind === 'tool_call' && line.tool) tools.set(line.tool, (tools.get(line.tool) ?? 0) + 1);
+      if (line.kind === 'assistant' && line.text) lastAssistant = line.text;
+      if (line.kind === 'user' && line.text) lastUser = line.text;
+    }
+    const where = status.project ?? `${status.harness}:${status.sessionId.slice(0, 8)}`;
+    const body = lastAssistant
+      ? oneLine(lastAssistant, 260)
+      : lastUser
+        ? `task: ${oneLine(lastUser, 200)}`
+        : 'no summary captured';
+    const toolList = [...tools.entries()].map(([name, count]) => `${name}×${count}`).join(', ');
+    return toolList ? `${body}\n(${where} · tools: ${toolList})` : `${body}\n(${where})`;
+  }
+
+  function detect(statuses: readonly HarnessStatus[]): void {
+    for (const status of statuses) {
+      const key = sessionKey(status.harness, status.sessionId);
+      const previous = lastActivity.get(key);
+      lastActivity.set(key, status.status);
+      if (previous === undefined || previous === status.status) continue;
+      const attention = status.status === 'waiting_approval';
+      const finished = status.status === 'done' || status.status === 'error';
+      if (!attention && !finished) {
+        // Session is working again: allow a fresh notice for the next settle.
+        notified.delete(`${key}:done`);
+        notified.delete(`${key}:error`);
+        notified.delete(`${key}:attention`);
+        continue;
+      }
+      const noticeKey = `${key}:${status.status}`;
+      if (notified.has(noticeKey)) continue;
+      notified.add(noticeKey);
+      options.onNotice?.({
+        kind: status.status === 'error' ? 'error' : attention ? 'attention' : 'done',
+        harness: status.harness,
+        sessionId: status.sessionId,
+        ...(status.project !== undefined ? { project: status.project } : {}),
+        ...(status.title !== undefined ? { title: status.title } : {}),
+        summary: summarize(status),
+      });
     }
   }
 
@@ -185,13 +262,14 @@ export function mountHarnessTeam(container: HTMLElement): { destroy(): void } {
   }
 
   const satellites = mountSatellites(container, store.source, {
-    size: 136,
+    size: base,
     onSelect(status) { selected = status; renderDetails(); },
   });
   const unsubscribe = store.source.subscribe((statuses) => {
+    detect(statuses);
     // Match the satellite layer's extra rings, leaving the unchanged mascot
     // centered instead of clipping a growing team at the original orbit edge.
-    const extent = 136 + Math.max(0, Math.ceil(statuses.length / 12) - 1) * 48;
+    const extent = base + Math.max(0, Math.ceil(statuses.length / 12) - 1) * 48;
     container.style.width = `${extent}px`;
     container.style.height = `${extent}px`;
     if (summary) summary.textContent = statuses.length > 0
