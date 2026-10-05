@@ -7,15 +7,19 @@
  *
  * The mapping is split into four INDEPENDENT channels:
  *
- *   activity   — body shape, glow, motion, rings (activity + progress)
- *   emotion    — face shape, hue tilt (emotion)
- *   speech     — mouth shape + ripple (speech)
+ *   activity   — head pose, eye openness/gaze, gentle motion (activity + progress)
+ *   emotion    — eye curvature, head tilt, blush and subtle hair tint (emotion)
+ *   speech     — eye squint/width and tiny head emphasis (speech)
  *   connection — opacity / desaturation (connection)
  *
  * Because each channel is derived only from its own source field, an emotion
  * change cannot disturb speech, and a speech update cannot disturb
  * activity/emotion. `stepVisual` then interpolates channel-by-channel, so the
  * axes stay independent all the way through a transition.
+ *
+ * Exported numeric records retain their original fields for compatibility.
+ * Legacy ornament fields are zero/unused; `spinner` now supplies thinking's
+ * sideways gaze. Speech's legacy `mouth*` fields drive eyes, never a mouth.
  */
 
 import type { Activity, Connection, DotState, Emotion, Speech } from '@doty/dot-state';
@@ -62,9 +66,9 @@ export interface ActivityVisual {
   bob: number;
   /** Seconds per bob cycle (larger = lazier). */
   bobPeriod: number;
-  /** Glow strength, 0..1. */
+   /** Gentle head pulse strength, 0..1 (legacy field name). */
   glow: number;
-  /** Body hue in degrees. */
+   /** Pastel hair hue reference in degrees. */
   hue: number;
   /** Body saturation, 0..1. */
   saturation: number;
@@ -78,7 +82,7 @@ export interface ActivityVisual {
   progressRing: number;
   /** Normalized progress 0..1, or null when not applicable. */
   progress: number | null;
-  /** Opacity of the indeterminate spinner, 0..1. */
+   /** Thinking sideways gaze strength, 0..1 (legacy field name). */
   spinner: number;
   /** Opacity of the orbiting satellite dots, 0..1. */
   orbit: number;
@@ -91,169 +95,169 @@ export interface ActivityVisual {
 }
 
 /**
- * Base pose per activity. Values are hand-tuned so every activity reads
- * differently at a glance: colour, size, motion and the visible ring all move.
+ * Base pose per activity. Motion is tiny and color stays pastel; the static
+ * head pose and eye silhouette carry the meaning even with motion disabled.
  */
 const ACTIVITY_VISUALS: Record<Activity, ActivityVisual> = {
   idle: {
-    scale: 0.92,
+    scale: 1,
     stretchX: 1,
     stretchY: 1,
-    bob: 0.014,
+    bob: 0.004,
     bobPeriod: 4.4,
-    glow: 0.35,
-    hue: 265,
-    saturation: 0.7,
-    lightness: 0.6,
+    glow: 0.12,
+    hue: 340,
+    saturation: 0.52,
+    lightness: 0.81,
     pulseHz: 0.35,
-    aura: 0.25,
+    aura: 0,
     progressRing: 0,
     progress: null,
     spinner: 0,
-    orbit: 0.15,
+    orbit: 0,
     shake: 0,
     eyeOpen: 1,
     lookY: 0,
   },
   listening: {
-    scale: 0.98,
-    stretchX: 1.05,
-    stretchY: 0.97,
-    bob: 0.01,
+    scale: 1,
+    stretchX: 0.99,
+    stretchY: 1.01,
+    bob: 0.003,
     bobPeriod: 3,
-    glow: 0.55,
-    hue: 205,
-    saturation: 0.78,
-    lightness: 0.62,
+    glow: 0.15,
+    hue: 330,
+    saturation: 0.52,
+    lightness: 0.81,
     pulseHz: 0.9,
-    aura: 0.55,
+    aura: 0,
     progressRing: 0,
     progress: null,
     spinner: 0,
-    orbit: 0.25,
+    orbit: 0,
     shake: 0,
     eyeOpen: 1.15,
-    lookY: 0.08,
+    lookY: -0.2,
   },
   thinking: {
-    scale: 0.9,
-    stretchX: 0.98,
-    stretchY: 1.02,
-    bob: 0.022,
+    scale: 0.97,
+    stretchX: 0.99,
+    stretchY: 1.01,
+    bob: 0.005,
     bobPeriod: 2.2,
-    glow: 0.5,
-    hue: 250,
-    saturation: 0.62,
-    lightness: 0.58,
+    glow: 0.18,
+    hue: 320,
+    saturation: 0.52,
+    lightness: 0.81,
     pulseHz: 0.7,
-    aura: 0.35,
+    aura: 0,
     progressRing: 0,
     progress: null,
     spinner: 0.9,
-    orbit: 0.45,
+    orbit: 0,
     shake: 0,
     eyeOpen: 0.85,
     lookY: 0.55,
   },
   working: {
-    scale: 0.95,
-    stretchX: 1.02,
-    stretchY: 1.02,
-    bob: 0.016,
+    scale: 0.98,
+    stretchX: 1.015,
+    stretchY: 0.98,
+    bob: 0.003,
     bobPeriod: 1.6,
-    glow: 0.62,
-    hue: 35,
-    saturation: 0.92,
-    lightness: 0.6,
-    pulseHz: 1.2,
-    aura: 0.55,
-    progressRing: 1,
+    glow: 0.8,
+    hue: 345,
+    saturation: 0.52,
+    lightness: 0.81,
+    pulseHz: 0.8,
+    aura: 0,
+    progressRing: 0,
     progress: null,
     spinner: 0,
-    orbit: 0.2,
+    orbit: 0,
     shake: 0,
-    eyeOpen: 1,
-    lookY: 0.12,
+    eyeOpen: 0.82,
+    lookY: -0.1,
   },
   speaking: {
     scale: 1,
-    stretchX: 1.05,
-    stretchY: 1.05,
-    bob: 0.03,
+    stretchX: 1.01,
+    stretchY: 0.99,
+    bob: 0.004,
     bobPeriod: 1.1,
-    glow: 0.6,
-    hue: 285,
-    saturation: 0.8,
-    lightness: 0.64,
+    glow: 0.25,
+    hue: 350,
+    saturation: 0.52,
+    lightness: 0.81,
     pulseHz: 1.5,
-    aura: 0.5,
+    aura: 0,
     progressRing: 0,
     progress: null,
     spinner: 0,
-    orbit: 0.3,
+    orbit: 0,
     shake: 0,
-    eyeOpen: 1,
+    eyeOpen: 0.72,
     lookY: 0,
   },
   waiting_approval: {
-    scale: 0.88,
+    scale: 0.95,
     stretchX: 1,
     stretchY: 1,
-    bob: 0.008,
+    bob: 0.002,
     bobPeriod: 5,
-    glow: 0.45,
-    hue: 45,
-    saturation: 0.88,
-    lightness: 0.62,
+    glow: 0.08,
+    hue: 345,
+    saturation: 0.52,
+    lightness: 0.81,
     pulseHz: 0.5,
-    aura: 0.75,
+    aura: 0,
     progressRing: 0,
     progress: null,
     spinner: 0,
-    orbit: 0.85,
+    orbit: 0,
     shake: 0,
-    eyeOpen: 1.05,
-    lookY: -0.1,
+    eyeOpen: 1.4,
+    lookY: -0.3,
   },
   done: {
-    scale: 1.02,
-    stretchX: 1,
-    stretchY: 1,
-    bob: 0.02,
+    scale: 1,
+    stretchX: 1.025,
+    stretchY: 0.97,
+    bob: 0.004,
     bobPeriod: 3.5,
-    glow: 0.72,
-    hue: 150,
-    saturation: 0.78,
-    lightness: 0.6,
+    glow: 0.2,
+    hue: 350,
+    saturation: 0.52,
+    lightness: 0.81,
     pulseHz: 0.6,
-    aura: 0.4,
-    progressRing: 0.85,
+    aura: 0,
+    progressRing: 0,
     progress: 1,
     spinner: 0,
-    orbit: 0.4,
+    orbit: 0,
     shake: 0,
     eyeOpen: 0.3,
     lookY: 0.05,
   },
   error: {
-    scale: 0.94,
+    scale: 0.97,
     stretchX: 1.02,
     stretchY: 0.96,
     bob: 0,
     bobPeriod: 8,
-    glow: 0.5,
-    hue: 0,
-    saturation: 0.88,
-    lightness: 0.55,
-    pulseHz: 2,
-    aura: 0.3,
+    glow: 0,
+    hue: 325,
+    saturation: 0.52,
+    lightness: 0.81,
+    pulseHz: 0.4,
+    aura: 0,
     progressRing: 0,
     progress: null,
     spinner: 0,
-    orbit: 0.2,
-    shake: 0.018,
+    orbit: 0,
+    shake: 0,
     eyeOpen: 0.55,
-    lookY: -0.15,
+    lookY: -0.65,
   },
 };
 
@@ -276,9 +280,9 @@ export interface EmotionVisual {
   hueShift: number;
   /** Saturation multiplier, 0..2. */
   saturationMul: number;
-  /** Mouth curve, -1 (frown) .. 1 (smile). */
+   /** Eye curvature, -1 (concerned) .. 1 (happy); legacy field name. */
   smile: number;
-  /** Brow attitude, -1 (angry) .. 1 (raised). */
+   /** Head tilt / sideways gaze attitude; no brows are drawn. */
   brow: number;
   /** Additional eye openness, added to the activity baseline. */
   eyeOpen: number;
@@ -289,11 +293,11 @@ export interface EmotionVisual {
 }
 
 const EMOTION_VISUALS: Record<Emotion, EmotionVisual> = {
-  neutral: { hueShift: 0, saturationMul: 1, smile: 0.05, brow: 0, eyeOpen: 0, lookY: 0, blush: 0 },
-  happy: { hueShift: 10, saturationMul: 1.15, smile: 0.85, brow: 0.3, eyeOpen: -0.1, lookY: 0.1, blush: 0.6 },
+   neutral: { hueShift: 0, saturationMul: 1, smile: 0, brow: 0, eyeOpen: 0, lookY: 0, blush: 0 },
+   happy: { hueShift: 10, saturationMul: 1.05, smile: 0.85, brow: 0.2, eyeOpen: -0.4, lookY: 0.1, blush: 0.6 },
   curious: { hueShift: -15, saturationMul: 1.05, smile: 0.15, brow: 0.65, eyeOpen: 0.18, lookY: 0.25, blush: 0.12 },
   concerned: { hueShift: -25, saturationMul: 0.85, smile: -0.45, brow: -0.7, eyeOpen: 0.22, lookY: -0.2, blush: 0 },
-  focused: { hueShift: 5, saturationMul: 1.08, smile: -0.1, brow: -0.3, eyeOpen: -0.12, lookY: -0.05, blush: 0 },
+   focused: { hueShift: 5, saturationMul: 0.95, smile: -0.1, brow: 0, eyeOpen: -0.28, lookY: -0.15, blush: 0 },
 };
 
 export function emotionVisual(emotion: Emotion): EmotionVisual {
@@ -305,11 +309,11 @@ export function emotionVisual(emotion: Emotion): EmotionVisual {
 /* -------------------------------------------------------------------------- */
 
 export interface SpeechVisual {
-  /** Mouth openness, 0..1. */
+   /** Speech eye-squint emphasis, 0..1 (legacy field name, no mouth). */
   mouthOpen: number;
-  /** Mouth width, 0 (narrow) .. 1 (wide). */
+   /** Squint width, 0 (narrow) .. 1 (wide); legacy field name. */
   mouthWide: number;
-  /** Ripple / resonance strength, 0..1. */
+   /** Speech energy / tiny head emphasis, 0..1; no rings are drawn. */
   ripple: number;
   /** Viseme carried through for reference (null when silent). */
   viseme: string | null;
@@ -345,7 +349,7 @@ const VISEME_SHAPES: Record<string, VisemeShape> = {
   silence: { open: 0, wide: 0.5 },
 };
 
-/** Map a viseme id (any case / punctuation) to a mouth shape. Pure. */
+/** Map a viseme id to eye emphasis, preserving the original numeric contract. */
 export function visemeShape(viseme: string): VisemeShape {
   const normalized = viseme.toLowerCase().replace(/[^a-z]/g, '');
   if (!normalized) return DEFAULT_VISEME;

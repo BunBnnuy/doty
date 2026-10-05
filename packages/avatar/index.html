@@ -7,12 +7,12 @@
     <style>
       :root {
         color-scheme: dark;
-        --bg: #0b0b12;
-        --panel: #15151f;
-        --line: #2a2a3a;
+        --bg: #222329;
+        --panel: #292a32;
+        --line: #3b3b45;
         --text: #e8e8f2;
         --muted: #9a9ab0;
-        --accent: #a855f7;
+        --accent: #d9c5e7;
       }
       * { box-sizing: border-box; }
       body {
@@ -20,7 +20,7 @@
         min-height: 100vh;
         font: 14px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
         color: var(--text);
-        background: radial-gradient(1200px 800px at 70% -10%, #1b1330, var(--bg));
+        background: var(--bg);
       }
       .app { max-width: 1040px; margin: 0 auto; padding: 28px 20px 60px; }
       h1 { font-size: 20px; margin: 0 0 4px; letter-spacing: 0.2px; }
@@ -30,10 +30,17 @@
       .stage {
         display: grid; place-items: center; gap: 14px;
         padding: 26px; border: 1px solid var(--line); border-radius: 18px;
-        background: linear-gradient(180deg, #17172400, #12121c);
+        background: var(--bg);
       }
       .caption { color: var(--muted); font-variant-numeric: tabular-nums; text-align: center; }
       .caption strong { color: var(--text); font-weight: 600; }
+      .small-mount { display: flex; align-items: center; gap: 20px; }
+      .stage .sub { margin: 0; text-align: center; }
+      .poses { margin-top: 32px; }
+      .poses h2 { font-size: 16px; }
+      .pose-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+      button.pose { display: grid; justify-items: center; gap: 4px; border-radius: 12px; padding: 12px 4px; font-size: 11px; background: var(--bg); }
+      .pose .sub { margin: 0; }
       .controls { display: grid; gap: 16px; }
       .group { border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px 14px; background: var(--panel); }
       .group h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); margin: 0 0 10px; }

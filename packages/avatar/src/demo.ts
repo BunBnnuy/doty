@@ -2,7 +2,7 @@
  * Vite demo for `@doty/avatar`.
  *
  * Run with `npm -w @doty/avatar run dev`. Click through every activity and
- * emotion, toggle speech/progress/connection, and watch the orb morph. There is
+ * emotion, toggle speech/progress/connection, and watch the mascot morph. There is
  * no backend: the demo drives the frozen `@doty/dot-state` store directly.
  */
 
@@ -54,12 +54,13 @@ const store = createDotStore();
 // --- layout ----------------------------------------------------------------
 
 const header = tag('header');
-header.append(tag('h1', undefined, 'Doty avatar'), tag('p', 'sub', 'Pure SVG, code-drawn, zero assets. Click through every state.'));
+header.append(tag('h1', undefined, 'Doty'), tag('p', 'sub', 'Two eyes. One little star. Flat SVG, no assets, no mouth.'));
 
 const stage = tag('section', 'stage');
 const mount = tag('div', 'mount');
 const caption = tag('div', 'caption');
-stage.append(mount, caption);
+const smallMount = tag('div', 'small-mount');
+stage.append(mount, smallMount, tag('p', 'sub', 'Also shown at 48px and 80px'), caption);
 
 const controls = tag('section', 'controls');
 const layout = tag('div', 'layout');
@@ -98,7 +99,7 @@ emotionGroup.append(emotionRow);
 // --- speech ----------------------------------------------------------------
 
 const speechGroup = tag('div', 'group');
-speechGroup.append(tag('h2', undefined, 'Speech (independent of emotion)'));
+speechGroup.append(tag('h2', undefined, 'Speech → eye squint (independent)'));
 const speechToggleLabel = tag('label', 'check');
 const speechToggle = tag('input');
 speechToggle.type = 'checkbox';
@@ -191,6 +192,7 @@ const resetButton = button('reset', () => store.dispatch({ type: 'reset' }));
 const reducedLabel = tag('label', 'check');
 const reducedToggle = tag('input');
 reducedToggle.type = 'checkbox';
+reducedToggle.checked = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 reducedLabel.append(reducedToggle, document.createTextNode('prefers-reduced-motion'));
 const demoRow = tag('div', 'row');
 demoRow.append(cycleButton, resetButton);
@@ -203,20 +205,54 @@ controls.append(activityGroup, emotionGroup, speechGroup, progressGroup, connect
 
 // --- mounting --------------------------------------------------------------
 
-let handle: AvatarHandle = mountAvatar(mount, store, { size: 220, reducedMotion: reducedToggle.checked });
+let handle: AvatarHandle;
+let smallHandles: AvatarHandle[] = [];
 
 function remount(): void {
-  handle.destroy();
-  handle = mountAvatar(mount, store, { size: 220, reducedMotion: reducedToggle.checked });
+  handle?.destroy();
+  for (const smallHandle of smallHandles) smallHandle.destroy();
+  handle = mountAvatar(mount, store, { size: 240, reducedMotion: reducedToggle.checked });
+  smallHandles = [48, 80].map((size) => mountAvatar(smallMount, store, { size, reducedMotion: reducedToggle.checked }));
   Object.assign(window, { dotyAvatar: handle });
 }
+remount();
 reducedToggle.addEventListener('change', remount);
+
+// Static contact sheet makes every activity/emotion combination inspectable.
+// Clicking one changes only those axes: existing speech and connection survive.
+const poses = tag('section', 'poses');
+poses.append(tag('h2', undefined, 'All 40 static poses'), tag('p', 'sub', 'Click any pose to try it above. Speech and connection stay untouched.'));
+const poseGrid = tag('div', 'pose-grid');
+for (const activity of ACTIVITIES) {
+  for (const emotion of EMOTIONS) {
+    const pose = button('', () => {
+      store.dispatch({ type: 'activity', value: activity });
+      store.dispatch({ type: 'emotion', value: emotion });
+    });
+    pose.className = 'pose';
+    pose.setAttribute('aria-label', `${activity.replace(/_/g, ' ')} · ${emotion}`);
+    mountAvatar(pose, { subscribe(listener) { listener({ activity, emotion }); return () => {}; } }, { size: 64, reducedMotion: true });
+    pose.append(tag('span', undefined, activity.replace(/_/g, ' ')), tag('span', 'sub', emotion));
+    poseGrid.append(pose);
+  }
+}
+poses.append(poseGrid);
+app.append(poses);
 
 // Keep the control panel in sync with the store.
 store.subscribe((state: DotState) => {
-  for (const [activity, b] of activityButtons) b.classList.toggle('active', activity === state.activity);
-  for (const [emotion, b] of emotionButtons) b.classList.toggle('active', emotion === state.emotion);
-  for (const [connection, b] of connectionButtons) b.classList.toggle('active', connection === (state.connection ?? 'online'));
+  for (const [activity, b] of activityButtons) {
+    b.classList.toggle('active', activity === state.activity);
+    b.setAttribute('aria-pressed', String(activity === state.activity));
+  }
+  for (const [emotion, b] of emotionButtons) {
+    b.classList.toggle('active', emotion === state.emotion);
+    b.setAttribute('aria-pressed', String(emotion === state.emotion));
+  }
+  for (const [connection, b] of connectionButtons) {
+    b.classList.toggle('active', connection === (state.connection ?? 'online'));
+    b.setAttribute('aria-pressed', String(connection === (state.connection ?? 'online')));
+  }
 
   speechToggle.checked = Boolean(state.speech);
   if (state.speech) {
@@ -241,4 +277,4 @@ store.subscribe((state: DotState) => {
 });
 
 // Expose for tinkering in the console.
-Object.assign(window, { dotyStore: store, dotyAvatar: handle });
+Object.assign(window, { dotyStore: store });

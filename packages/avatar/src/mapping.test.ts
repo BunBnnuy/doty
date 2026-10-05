@@ -55,7 +55,7 @@ describe('channel derivations', () => {
 });
 
 describe('viseme mapping', () => {
-  it('closes the mouth on bilabials and opens it widest on open vowels', () => {
+  it('gives bilabials less eye emphasis than open vowels, preserving viseme compatibility', () => {
     expect(visemeShape('MBP').open).toBe(0);
     expect(visemeShape('AA').open).toBeGreaterThan(visemeShape('MBP').open);
     expect(visemeShape('O').wide).toBeLessThan(visemeShape('E').wide);
@@ -68,14 +68,14 @@ describe('viseme mapping', () => {
     expect(fallback.open).toBeLessThan(1);
   });
 
-  it('scales mouth openness with energy', () => {
+  it('scales eye squint emphasis with speech energy (legacy numeric fields)', () => {
     const quiet = speechVisual({ viseme: 'AA', energy: 0 });
     const loud = speechVisual({ viseme: 'AA', energy: 1 });
     expect(loud.mouthOpen).toBeGreaterThan(quiet.mouthOpen);
     expect(loud.ripple).toBe(1);
   });
 
-  it('rests the mouth when there is no speech', () => {
+  it('rests speech eye emphasis when there is no speech', () => {
     expect(speechVisual(null)).toEqual({ mouthOpen: 0, mouthWide: 0.5, ripple: 0, viseme: null });
     expect(speechVisual(undefined)).toEqual(speechVisual(null));
   });
@@ -103,6 +103,27 @@ describe('axis independence (targets)', () => {
     const b = deriveVisual({ activity: 'error', emotion: 'concerned' });
     expect(b.emotion).toEqual(a.emotion);
     expect(b.activity).not.toEqual(a.activity);
+  });
+
+  it('every single-axis update leaves all three other channels unchanged', () => {
+    const state: DotState = { activity: 'working', emotion: 'curious', speech: { viseme: 'O', energy: 0.8 }, progress: 0.4, connection: 'reconnecting' };
+    const base = deriveVisual(state);
+    const changes: Array<[keyof typeof base, DotState]> = [
+      ['activity', { ...state, activity: 'error' }],
+      ['emotion', { ...state, emotion: 'focused' }],
+      ['speech', { ...state, speech: { viseme: 'AA', energy: 0.3 } }],
+      ['connection', { ...state, connection: 'offline' }],
+    ];
+    for (const [changedChannel, nextState] of changes) {
+      const target = deriveVisual(nextState);
+      const interpolated = stepVisual(base, target, 1 / 60);
+      for (const channel of ['activity', 'emotion', 'speech', 'connection'] as const) {
+        if (channel !== changedChannel) {
+          expect(target[channel]).toEqual(base[channel]);
+          expect(interpolated[channel]).toEqual(base[channel]);
+        }
+      }
+    }
   });
 });
 
