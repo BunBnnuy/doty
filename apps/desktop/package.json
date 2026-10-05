@@ -12,6 +12,8 @@
     "@doty/avatar": "*",
     "@doty/dot-state": "*",
     "@doty/harness-events": "*",
-    "@tauri-apps/api": "^2.12.1"
+    "@tauri-apps/api": "^2.12.1",
+    "dompurify": "^3.4.16",
+    "marked": "^18.1.0"
   }
 }

@@ -8,6 +8,7 @@
 
 import type { Connection } from '@doty/dot-state';
 import { isRetryableSend, normalizeServerUrl } from './api.js';
+import { renderMarkdown } from './markdown.js';
 import type { SseFrame } from './sse.js';
 import { toChatLine, type ChatLine } from './wire.js';
 
@@ -67,6 +68,13 @@ export function mountChat(options: MountChatOptions): ChatPanel {
 
   serverInput.value = options.serverUrl;
   renderEmpty();
+
+  // Markdown links must not navigate the app window away.
+  list.addEventListener('click', (event) => {
+    if (event.target instanceof Element && event.target.closest('a')) {
+      event.preventDefault();
+    }
+  });
 
   composer.addEventListener('submit', (event) => {
     event.preventDefault();
@@ -178,6 +186,12 @@ export function mountChat(options: MountChatOptions): ChatPanel {
         body.textContent = item.text.slice(splitAt + 3);
         element.append(body);
       }
+    } else if (item.role === 'assistant') {
+      const body = document.createElement('span');
+      body.className = 'msg-text msg-markdown';
+      // Sanitized: model output is untrusted.
+      body.innerHTML = renderMarkdown(item.text);
+      element.append(body);
     } else {
       const body = document.createElement('span');
       body.className = 'msg-text';
