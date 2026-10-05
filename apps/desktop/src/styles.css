@@ -482,6 +482,8 @@ button:hover {
   left: 50%;
   transform: translateX(-50%);
   max-width: 210px;
+  max-height: 62px;
+  overflow: hidden;
   padding: 6px 9px;
   border-radius: 10px;
   background: rgba(20, 18, 32, 0.95);

@@ -164,9 +164,9 @@ export function mountHarnessTeam(
     }
     const where = status.project ?? `${status.harness}:${status.sessionId.slice(0, 8)}`;
     const body = lastAssistant
-      ? oneLine(lastAssistant, 260)
+      ? oneLine(lastAssistant, 140)
       : lastUser
-        ? `task: ${oneLine(lastUser, 200)}`
+        ? `task: ${oneLine(lastUser, 120)}`
         : 'no summary captured';
     const toolList = [...tools.entries()].map(([name, count]) => `${name}×${count}`).join(', ');
     return toolList ? `${body}\n(${where} · tools: ${toolList})` : `${body}\n(${where})`;

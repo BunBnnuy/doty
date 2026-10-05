@@ -197,6 +197,7 @@ function applySettings(next: DotySettings): void {
   if (settings.orbitSize !== previous.orbitSize) {
     harnessTeam.destroy();
     harnessTeam = mountHarnessTeam(slotMount, harnessOptions());
+    if (!panelOpen) void applyCollapsedSize();
   }
   if (settings.serverUrl !== previous.serverUrl) {
     serverUrl = settings.serverUrl;
@@ -247,12 +248,32 @@ dotyField?.addEventListener('change', () => {
 // Window: collapse/expand + dragging
 // ---------------------------------------------------------------------------
 
-const COLLAPSED = { width: 220, height: 220 };
 const PANEL = { width: 380, height: 560 };
 const EDGE = 8;
 const CHAR_ANCHOR = 72;
 let panelOpen = false;
 let charScreen: { x: number; y: number } | null = null;
+
+/** The collapsed window must fit the orbit area, whatever the slider says. */
+function collapsedDims(): { width: number; height: number } {
+  const side = Math.max(220, Math.round(settings.orbitSize) + 44);
+  return { width: side, height: side };
+}
+
+async function applyCollapsedSize(): Promise<void> {
+  if (!IS_TAURI) return;
+  try {
+    const api = await import('@tauri-apps/api/window');
+    const dpi = await import('@tauri-apps/api/dpi');
+    const scale = await api.getCurrentWindow().scaleFactor();
+    const dims = collapsedDims();
+    await api.getCurrentWindow().setSize(
+      new dpi.PhysicalSize(Math.round(dims.width * scale), Math.round(dims.height * scale)),
+    );
+  } catch {
+    // Window control unavailable.
+  }
+}
 
 function clamp(value: number, lo: number, hi: number): number {
   return Math.min(Math.max(value, lo), Math.max(lo, hi));
@@ -281,8 +302,8 @@ async function setPanelOpen(open: boolean): Promise<void> {
       ? { x: monitor.position.x, y: monitor.position.y, w: monitor.size.width, h: monitor.size.height }
       : { x: 0, y: 0, w: 1920 * scale, h: 1080 * scale };
 
-    const cw = COLLAPSED.width * scale;
-    const ch = COLLAPSED.height * scale;
+    const cw = collapsedDims().width * scale;
+    const ch = collapsedDims().height * scale;
     const pw = PANEL.width * scale;
     const ph = PANEL.height * scale;
     const edge = EDGE * scale;
@@ -325,6 +346,7 @@ async function setPanelOpen(open: boolean): Promise<void> {
 }
 
 const IS_TAURI = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+if (IS_TAURI) void applyCollapsedSize();
 
 if (IS_TAURI) {
   void import('@tauri-apps/api/core')
@@ -340,6 +362,10 @@ if (IS_TAURI) {
     .then(({ getCurrentWindow }) => {
       stage?.addEventListener('mousedown', (event) => {
         if (event.button !== 0) return;
+        const target = event.target;
+        if (target instanceof Element && target.closest('#speech, input, textarea, select, button, a, summary')) {
+          return;
+        }
         const startX = event.clientX;
         const startY = event.clientY;
         let moved = false;
