@@ -1,0 +1,32 @@
+# Doty desktop shell — Tauri v2.
+#
+# These packages mirror the @doty contracts in TypeScript (packages/*), but this
+# crate is intentionally STANDALONE: the empty `[workspace]` table below makes
+# it its own Cargo workspace root, so Cargo does not try to attach it to the
+# repository's root `Cargo.toml`. Do not remove it.
+[workspace]
+
+[package]
+name = "doty-desktop"
+version = "0.0.0"
+description = "Doty — always-on assistant desktop shell (floating dot + tray)"
+authors = ["Doty"]
+edition = "2021"
+rust-version = "1.77.2"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# `tray-icon` powers the always-present tray anchor. Transparency, borderless
+# and always-on-top are configured in tauri.conf.json, not feature flags.
+tauri = { version = "2", features = ["tray-icon"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

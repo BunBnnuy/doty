@@ -393,15 +393,22 @@ docs/                    this plan
 
 ## Open questions
 
-- **T3 Code: API vs. SQLite** — does `server-runtime.json` expose a stable local
-  API? If not, parsing `statev2.sqlite` is version-fragile and needs a schema
-  guard.
-- **OpenCode capture** — attach to `serve` SSE (live + structured, needs a running
-  server) or read `opencode.db` (always available, we parse it ourselves)? Likely
-  both: SSE when present, DB as fallback.
 - Which OpenAI-compatible provider is the default (OpenAI / xAI / OpenRouter / local)?
 - Embeddings for memory: same provider, or a dedicated small local model?
 - Approvals when the client is closed: rely on the queue + notify on next open,
   or add web push / a phone channel?
 - Persona: one hardcoded character at M1, or user-named/avatar-picked from the start?
+
+### Resolved (2026-10-05) — see `docs/recon-adapters.md`
+
+- **T3 Code has no discoverable local API.** Every probed HTTP path returns the SPA
+  catch-all. Parse `statev2.sqlite` **read-only**, reading the
+  `orchestration_v2_projection_*` tables, behind a `sqlite_master` schema guard.
+- **OpenCode: read the DB, not SSE.** `opencode.db` is always present; use the v2
+  `session_v2 → session_message` path ordered by `seq`, poll WAL-safely, fall back
+  to v1 `session → message → part`. Attach to `serve` SSE only if a daemon exists.
+- **Tauri toolchain confirmed present** — MSVC Build Tools 18 (`link.exe`), Windows
+  SDK 10.0.26100, WebView2 154.x. Builds run from a VS Developer prompt.
+- Both stores are private/versioned: feature-detect the schema and emit nothing on
+  mismatch rather than guessing.
 ```
