@@ -74,15 +74,24 @@ describe('agent loop (mock provider, no network)', () => {
     expect((event?.data as { observation: { truncated?: boolean } }).observation.truncated).toBe(true);
   });
 
-  it('bounds model turns and emits max_steps instead of inventing a final answer', async () => {
+  it('stops at the step limit and ends with max_steps when the wrap-up has no answer', async () => {
     const provider = new MockProvider([call, call, call]);
     const log = new InMemoryEventLog();
     const result = await runAgent({ task: 'Keep going', provider, tools: new ToolRegistry([nowTool]), log, maxSteps: 2 });
     expect(result).toMatchObject({ status: 'max_steps', steps: 2 });
-    expect(provider.requests).toHaveLength(2);
+    expect(provider.requests).toHaveLength(3); // 2 steps + one tool-free wrap-up
+    expect(provider.requests[2]?.tools).toEqual([]);
     expect(log.since(0).filter((event) => event.type === 'observation')).toHaveLength(2);
     expect(log.since(0).some((event) => event.type === 'final')).toBe(false);
     expect(log.since(0).at(-1)).toMatchObject({ type: 'run_finished', data: { status: 'max_steps' } });
+  });
+
+  it('answers from the wrap-up turn when the step limit is reached', async () => {
+    const provider = new MockProvider([call, call, { role: 'assistant', content: 'Here is what I found.' }]);
+    const log = new InMemoryEventLog();
+    const result = await runAgent({ task: 'Keep going', provider, tools: new ToolRegistry([nowTool]), log, maxSteps: 2 });
+    expect(result).toMatchObject({ status: 'completed', answer: 'Here is what I found.' });
+    expect(log.since(0).at(-1)).toMatchObject({ type: 'run_finished', data: { status: 'completed' } });
   });
 
   it('pauses before a side effect and leaves later tool calls unexecuted', async () => {

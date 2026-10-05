@@ -147,6 +147,32 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentRunResult
         });
       }
     }
+    // Step budget exhausted: one tool-free turn so the model can summarize what
+    // it learned instead of ending with nothing.
+    try {
+      const wrapStep = maxSteps + 1;
+      messages.push({
+        role: 'system',
+        content: 'You have reached the tool-step limit. Answer the user now using what you already know. Do not request more tools.',
+      });
+      emit('model_step', { step: wrapStep, wrapUp: true });
+      const assistant = await options.provider.complete({
+        messages: [...messages],
+        tools: [],
+        ...(options.signal ? { signal: options.signal } : {}),
+        onDelta: (text) => emit('assistant_delta', { step: wrapStep, text }),
+      });
+      messages.push(assistant);
+      emit('assistant_message', { step: wrapStep, content: assistant.content });
+      if (assistant.content.trim()) {
+        steps = wrapStep;
+        emit('final', { step: wrapStep, text: assistant.content });
+        state('done', 'Done');
+        return finish('completed', { answer: assistant.content });
+      }
+    } catch {
+      // The wrap-up turn failed; report the step limit instead.
+    }
     emit('max_steps', { maxSteps });
     state('error', 'Step limit reached');
     return finish('max_steps');
