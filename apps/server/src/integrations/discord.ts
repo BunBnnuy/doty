@@ -213,7 +213,14 @@ export function startDiscordBot(options: DiscordBotOptions): DiscordBot {
     if (event !== 'MESSAGE_CREATE') return;
     const message = readIncoming(data, botUserId);
     if (!message) return;
-    if (!shouldRespondToMessage(message, respondOptions)) return;
+    if (!shouldRespondToMessage(message, respondOptions)) {
+      // Metadata only: helps diagnose why a guild message was ignored (usually a
+      // missing MESSAGE_CONTENT intent, which empties `content`).
+      if (message.guildId) {
+        log(`discord: ignored guild message (channel=${message.channelId} mention=${message.mentionedBot} contentLen=${message.content.length})`);
+      }
+      return;
+    }
     const text = stripBotMention(message.content, botUserId);
     if (!text) return;
     void respond(message, text);
