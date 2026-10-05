@@ -48,6 +48,7 @@ store.dispatch({ type: 'connection', value: 'reconnecting' });
 const harnessOptions = (): HarnessTeamOptions => ({
   orbitSize: settings.orbitSize,
   dotSize: settings.orbitalSize,
+  dotySize: settings.dotySize,
   onNotice: handleNotice,
 });
 
@@ -198,11 +199,13 @@ function applySettings(next: DotySettings): void {
     avatar.destroy();
     avatar = mountAvatar(avatarMount, store, { size: settings.dotySize });
   }
-  if (settings.orbitSize !== previous.orbitSize || settings.orbitalSize !== previous.orbitalSize) {
+  const orbitChanged =
+    settings.orbitSize !== previous.orbitSize || settings.dotySize !== previous.dotySize;
+  if (orbitChanged || settings.orbitalSize !== previous.orbitalSize) {
     harnessTeam.destroy();
     harnessTeam = mountHarnessTeam(slotMount, harnessOptions());
-    if (!panelOpen && settings.orbitSize !== previous.orbitSize) void applyCollapsedSize();
   }
+  if (orbitChanged && !panelOpen) void applyCollapsedSize();
   if (settings.serverUrl !== previous.serverUrl) {
     serverUrl = settings.serverUrl;
     stream?.restart();
@@ -272,7 +275,11 @@ let charScreen: { x: number; y: number } | null = null;
 
 /** The collapsed window must fit the orbit area, whatever the slider says. */
 function collapsedDims(): { width: number; height: number } {
-  const side = Math.max(220, Math.round(settings.orbitSize) + 44);
+  const side = Math.max(
+    220,
+    Math.round(settings.orbitSize) + 44,
+    Math.round(settings.dotySize) + 84,
+  );
   return { width: side, height: side };
 }
 

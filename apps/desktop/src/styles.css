@@ -100,10 +100,9 @@ body {
 
 #avatar {
   position: absolute;
-  left: calc(50% - 38px);
-  top: calc(50% - 38px);
-  width: 76px;
-  height: 76px;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
   overflow: visible;
 }
 

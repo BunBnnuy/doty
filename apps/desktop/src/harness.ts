@@ -24,6 +24,8 @@ export interface HarnessTeamOptions {
   orbitSize?: number;
   /** Diameter of each satellite dot, in CSS pixels. */
   dotSize?: number;
+  /** Diameter of the character; the orbit grows to clear it. */
+  dotySize?: number;
   onNotice?: (notice: HarnessNotice) => void;
 }
 
@@ -131,7 +133,11 @@ export function mountHarnessTeam(
   options: HarnessTeamOptions = {},
 ): { destroy(): void } {
   const store = createHarnessStore();
-  const base = Math.max(96, Math.round(options.orbitSize ?? 150));
+  const base = Math.max(
+    96,
+    Math.round(options.orbitSize ?? 150),
+    Math.round(options.dotySize ?? 76) + 40,
+  );
   const baseDot = Math.max(8, Math.round(options.dotSize ?? 17));
   const panel = document.getElementById('harness-details');
   const details = document.getElementById('harness-fields');
