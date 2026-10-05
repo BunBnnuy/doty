@@ -58,7 +58,14 @@ export function registerEventRoutes(app: FastifyInstance, log: EventLog): void {
     reply.hijack();
     const res = reply.raw;
 
+    // Preserve headers set by plugins (e.g. @fastify/cors) before hijack.
+    const headers: Record<string, string | number | string[]> = {};
+    for (const [key, value] of Object.entries(reply.getHeaders())) {
+      if (value !== undefined) headers[key] = value;
+    }
+
     res.writeHead(200, {
+      ...headers,
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-cache, no-transform',
       Connection: 'keep-alive',
