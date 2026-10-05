@@ -1,53 +1,122 @@
 /**
  * Doty desktop webview entry.
  *
- * This is deliberately minimal: it subscribes to the shared `DotState` contract
- * and mirrors it onto a PLACEHOLDER dot element via `data-*` attributes. The
- * real `@doty/avatar` renderer is wired in during Wave 2 and will consume the
- * same store — nothing here is avatar-specific.
+ * The character is `@doty/avatar`, mounted on the shared `DotState` store.
+ * While `GET /events` is live, server frames drive that same store. When the
+ * server is unreachable the fake driver keeps the dot alive and the composer
+ * queues outgoing text until the stream returns.
  */
-import { createDotStore, startFakeDriver } from '@doty/dot-state';
+import { mountAvatar } from '@doty/avatar';
+import { createDotStore, startFakeDriver, type Connection, type DotStore } from '@doty/dot-state';
+import { postMessage, rememberServerUrl, resolveServerUrl } from './api.js';
+import { mountChat } from './chat.js';
+import { openEventStream, type StreamStatus } from './sse.js';
+import { applyFrame } from './wire.js';
 
-const dot = document.getElementById('dot');
+const avatarHost = document.getElementById('avatar');
 const label = document.getElementById('label');
+const connectionEl = document.getElementById('connection');
+const app = document.getElementById('app');
 
-if (!(dot instanceof HTMLElement)) {
-  throw new Error('Doty webview: #dot element is missing from index.html');
+if (!(avatarHost instanceof HTMLElement)) {
+  throw new Error('Doty webview: #avatar element is missing from index.html');
 }
 
 const store = createDotStore();
-// Fake driver so the floating dot is alive with no server/backends present.
-const stopDriver = startFakeDriver(store);
+store.dispatch({ type: 'connection', value: 'reconnecting' });
+
+const avatar = mountAvatar(avatarHost, store, { size: 76 });
+avatar.element.setAttribute('data-tauri-drag-region', '');
+
+let serverUrl = resolveServerUrl();
+let fallback = false;
+let stopDriver: (() => void) | undefined;
 
 store.subscribe((state) => {
-  dot.dataset.activity = state.activity;
-  dot.dataset.emotion = state.emotion;
-  dot.dataset.connection = state.connection ?? 'online';
-
-  if (typeof state.progress === 'number') {
-    dot.dataset.progress = state.progress.toFixed(2);
-    dot.style.setProperty('--progress', String(state.progress));
-  } else {
-    delete dot.dataset.progress;
-    dot.style.removeProperty('--progress');
+  if (label) label.textContent = state.label ?? '';
+  const connection = state.connection ?? 'online';
+  if (app) app.dataset.connection = connection;
+  if (connectionEl) {
+    connectionEl.textContent = connection;
+    connectionEl.dataset.connection = connection;
   }
-
-  if (label) {
-    label.textContent = state.label ?? '';
+  // The fake driver's `reset` step clears the client-owned connection field.
+  if (fallback && state.connection !== 'offline') {
+    store.dispatch({ type: 'connection', value: 'offline' });
   }
-
-  dot.setAttribute(
-    'aria-label',
-    `Doty is ${state.activity}${state.label ? `: ${state.label}` : ''}`,
-  );
 });
+
+let stream: ReturnType<typeof openEventStream> | undefined;
+
+const chat = mountChat({
+  serverUrl,
+  lastSeq: () => stream?.lastSeq() ?? 0,
+  send: (text) => postMessage(serverUrl, text),
+  onServerUrl(next) {
+    rememberServerUrl(next);
+    if (next === serverUrl) return;
+    serverUrl = next;
+    stream?.restart();
+  },
+});
+
+stream = openEventStream({
+  url: () => serverUrl,
+  onFrame(frame) {
+    try {
+      applyFrame(store, frame);
+      chat.ingest(frame);
+    } catch (error) {
+      console.warn('[doty] dropped a malformed event:', error);
+    }
+  },
+  onStatus(status) {
+    applyConnection(store, status);
+  },
+  onReset() {
+    chat.forgetHistory();
+  },
+});
+
+function applyConnection(target: DotStore, status: StreamStatus): void {
+  const connection: Connection = status;
+  chat.setConnection(connection);
+  if (status === 'online') {
+    disengageFallback();
+    target.dispatch({ type: 'connection', value: 'online' });
+    void chat.flush();
+    return;
+  }
+  target.dispatch({ type: 'connection', value: connection });
+  if (status === 'offline') engageFallback();
+}
+
+function engageFallback(): void {
+  if (fallback) return;
+  fallback = true;
+  stopDriver = startFakeDriver(store);
+  if (store.get().connection !== 'offline') {
+    store.dispatch({ type: 'connection', value: 'offline' });
+  }
+}
+
+function disengageFallback(): void {
+  if (!fallback) return;
+  // Clear the flag before `reset`, or the subscriber would force offline again.
+  fallback = false;
+  stopDriver?.();
+  stopDriver = undefined;
+  store.dispatch({ type: 'reset' });
+}
 
 window.addEventListener('beforeunload', () => {
-  stopDriver();
+  stream?.stop();
+  stopDriver?.();
+  avatar.destroy();
 });
 
-// Optional: report the state of the Wave 1 OS-integration stubs from the Rust
-// side. Guarded so the same bundle also runs in a plain browser (`vite dev`).
+// Optional: report the state of the OS-integration stubs from the Rust side.
+// Guarded so the same bundle also runs in a plain browser (`vite dev`).
 declare global {
   interface Window {
     __TAURI_INTERNALS__?: unknown;
@@ -58,7 +127,6 @@ if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
   void import('@tauri-apps/api/core')
     .then(({ invoke }) => invoke('stub_report'))
     .then((report) => {
-      // eslint-disable-next-line no-console
       console.info('[doty] OS-integration stubs:', report);
     })
     .catch((error: unknown) => {

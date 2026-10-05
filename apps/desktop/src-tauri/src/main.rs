@@ -6,8 +6,9 @@
 //!   * **stubs** for autostart, global hotkey and the updater.
 //!
 //! The dot itself is rendered by the webview (`index.html` / `src/main.ts`),
-//! which drives it from the shared `@doty/dot-state` contract via a fake driver.
-//! The real `@doty/avatar` renderer lands in Wave 2.
+//! which mounts `@doty/avatar` on the shared `@doty/dot-state` store. The store
+//! is driven by the server SSE stream, with the fake driver as a fallback when
+//! the server is unreachable.
 //!
 //! The autostart/hotkey/updater stubs deliberately avoid pulling in the Tauri
 //! plugins from `tauri-plugin-*` yet. Each stub below documents the exact plugin
