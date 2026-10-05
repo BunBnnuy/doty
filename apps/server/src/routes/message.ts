@@ -1,9 +1,8 @@
 /**
  * `POST /message` — client -> server command.
  *
- * Wave 1 is a stub: validate the body with zod, append a `message` event to the
- * log (so connected SSE clients see it), and acknowledge. The real agent loop
- * replaces the handler later; the wire contract (zod -> EventLog) stays.
+ * Validate and append a `message` event, then start an optional background run.
+ * The acknowledgement stays immediate; run events arrive through `/events`.
  */
 
 import type { FastifyInstance } from 'fastify';
@@ -33,7 +32,11 @@ export function toMessageFrame(body: MessageBody): MessageFrame {
   return { type: 'message', text: body.text };
 }
 
-export function registerMessageRoutes(app: FastifyInstance, log: EventLog): void {
+export function registerMessageRoutes(
+  app: FastifyInstance,
+  log: EventLog,
+  startRun?: (text: string) => string,
+): void {
   app.post('/message', async (request, reply) => {
     const parsed = messageBodySchema.safeParse(request.body);
     if (!parsed.success) {
@@ -51,6 +54,7 @@ export function registerMessageRoutes(app: FastifyInstance, log: EventLog): void
       data: { text: parsed.data.text },
     });
 
-    return reply.code(202).send({ ok: true, event });
+    const runId = startRun?.(parsed.data.text);
+    return reply.code(202).send({ ok: true, event, ...(runId ? { runId } : {}) });
   });
 }

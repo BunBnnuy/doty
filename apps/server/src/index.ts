@@ -1,9 +1,9 @@
 /**
  * @doty/server — the online brain (API + worker).
  *
- * Wave 1: Fastify API skeleton with `/health`, a replayable `/events` SSE
- * stream backed by an in-memory append-only log, and a zod-validated
- * `POST /message`. No Postgres is required to run this.
+ * Fastify API with `/health`, replayable `/events` SSE, and a validated
+ * `POST /message`. Set OPENAI_MODEL to enable the tool-calling agent runtime.
+ * No Postgres is required to run this.
  *
  * Run: `npm -w @doty/server run dev`
  */
@@ -11,12 +11,16 @@
 import { pathToFileURL } from 'node:url';
 import 'dotenv/config';
 import { buildApp } from './app.js';
+import { OpenAIChatProvider, openAIConfigFromEnv } from './provider/openai.js';
 
 const PORT = Number.parseInt(process.env.PORT ?? '8787', 10);
 const HOST = process.env.HOST ?? '0.0.0.0';
 
 async function main(): Promise<void> {
-  const { app } = buildApp({ logger: true });
+  const agent = process.env.OPENAI_MODEL?.trim()
+    ? { provider: new OpenAIChatProvider(openAIConfigFromEnv()) }
+    : undefined;
+  const { app } = buildApp({ logger: true, ...(agent ? { agent } : {}) });
 
   const shutdown = async (signal: string): Promise<void> => {
     app.log.info({ signal }, 'shutting down');

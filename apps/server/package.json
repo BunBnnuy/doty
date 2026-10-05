@@ -20,5 +20,8 @@
     "pg-boss": "^12.36.0",
     "pino": "^10.4.0",
     "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.23.1"
   }
 }

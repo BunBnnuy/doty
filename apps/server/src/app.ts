@@ -12,12 +12,15 @@ import { InMemoryEventLog, type EventLog } from './events/log.js';
 import { registerEventRoutes } from './routes/events.js';
 import { registerHealthRoutes } from './routes/health.js';
 import { registerMessageRoutes } from './routes/message.js';
+import { AgentRuntime, type AgentRuntimeOptions } from './agent/runtime.js';
 
 export interface BuildAppOptions {
   /** Inject a log (e.g. a future `PgEventLog`); defaults to in-memory. */
   log?: EventLog;
   /** Fastify/Pino logging. Off in tests, on in `index.ts`. */
   logger?: boolean;
+  /** Opt-in, injectable model runtime. Omitted = event-only scaffold. */
+  agent?: AgentRuntimeOptions;
 }
 
 export interface BuiltApp {
@@ -34,7 +37,9 @@ export function buildApp(options: BuildAppOptions = {}): BuiltApp {
 
   registerHealthRoutes(app);
   registerEventRoutes(app, log);
-  registerMessageRoutes(app, log);
+  const runtime = options.agent ? new AgentRuntime(options.agent, log) : undefined;
+  registerMessageRoutes(app, log, runtime ? (text) => runtime.start(text) : undefined);
+  if (runtime) app.addHook('onClose', async () => runtime.close());
 
   return { app, log };
 }
