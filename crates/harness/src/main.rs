@@ -7,7 +7,8 @@
 use anyhow::{bail, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use doty_harness::{
-    Adapter, CodexAdapter, DigestBuilder, Harness, SessionRef, StreamOptions,
+    Adapter, CodexAdapter, DigestBuilder, Harness, OpenCodeAdapter, SessionRef, StreamOptions,
+    T3Adapter,
 };
 use std::io::Write;
 use std::path::PathBuf;
@@ -102,34 +103,36 @@ fn run() -> Result<()> {
     }
 }
 
-fn adapter_for(harness: HarnessArg) -> Result<CodexAdapter> {
+fn adapter_for(harness: HarnessArg) -> Result<Box<dyn Adapter>> {
     match harness {
-        HarnessArg::Codex => Ok(CodexAdapter::new()),
-        other => bail!(
-            "the {} adapter is not implemented yet (SA-3 ships Codex first)",
-            other.harness()
-        ),
+        HarnessArg::Codex => Ok(Box::new(CodexAdapter::new())),
+        HarnessArg::Opencode => Ok(Box::new(OpenCodeAdapter::new())),
+        HarnessArg::T3 => Ok(Box::new(T3Adapter::new())),
     }
 }
 
-fn resolve_session(adapter: &CodexAdapter, file: &Option<PathBuf>) -> Result<SessionRef> {
+fn resolve_session(
+    adapter: &dyn Adapter,
+    harness: HarnessArg,
+    file: &Option<PathBuf>,
+) -> Result<SessionRef> {
     if let Some(path) = file {
+        if !matches!(harness, HarnessArg::Codex) {
+            bail!("--file is only supported for Codex rollouts");
+        }
         if !path.exists() {
             bail!("no such file: {}", path.display());
         }
-        return Ok(adapter.session_ref_for_path(path));
+        return Ok(CodexAdapter::new().session_ref_for_path(path));
     }
-    adapter.latest()?.ok_or_else(|| {
-        anyhow::anyhow!(
-            "no Codex rollout files found under {}",
-            adapter.root().display()
-        )
-    })
+    adapter
+        .latest()?
+        .ok_or_else(|| anyhow::anyhow!("no {} sessions found", harness.harness()))
 }
 
 fn cmd_watch(args: WatchArgs) -> Result<()> {
     let adapter = adapter_for(args.harness)?;
-    let session = resolve_session(&adapter, &args.file)?;
+    let session = resolve_session(adapter.as_ref(), args.harness, &args.file)?;
     let options = StreamOptions {
         replay: !args.no_replay,
         follow: !args.no_follow,
@@ -176,7 +179,7 @@ fn cmd_list(args: ListArgs) -> Result<()> {
 
 fn cmd_digest(args: DigestArgs) -> Result<()> {
     let adapter = adapter_for(args.harness)?;
-    let session = resolve_session(&adapter, &args.file)?;
+    let session = resolve_session(adapter.as_ref(), args.harness, &args.file)?;
     let options = StreamOptions {
         replay: true,
         follow: false,

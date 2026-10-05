@@ -16,6 +16,9 @@ pub mod adapter;
 pub mod codex;
 pub mod digest;
 pub mod model;
+pub mod opencode;
+pub mod sqlite;
+pub mod t3;
 pub mod time;
 
 pub use adapter::{Adapter, SessionRef, StreamOptions};
@@ -25,6 +28,8 @@ pub use model::{
     DigestOutcome, Harness, HarnessActivity, HarnessEvent, HarnessEventKind, HarnessStatus,
     SessionDigest, TokenTotals, TokenUsage, ToolInfo, TRANSMITTED_DIGEST_FIELDS,
 };
+pub use opencode::OpenCodeAdapter;
+pub use t3::T3Adapter;
 
 /// Bump whenever the mirrored event shape changes.
 pub const CONTRACT_VERSION: &str = "0";

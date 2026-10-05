@@ -11,6 +11,8 @@ anyhow = { workspace = true }
 notify = "8"
 # CLI for the `doty-watch` binary.
 clap = { version = "4", features = ["derive"] }
+# Read-only SQLite adapters for OpenCode and T3.
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [[bin]]
 name = "doty-watch"
