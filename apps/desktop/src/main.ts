@@ -7,16 +7,19 @@
  * queues outgoing text until the stream returns.
  *
  * The local harness watcher feeds the satellites AND, when a session finishes
- * or needs the user, a speech bubble plus an avatar reaction.
+ * or needs the user, a speech bubble plus an avatar reaction. Pending T3
+ * questions are pinned at the end of the chat.
  */
 import { mountAvatar } from '@doty/avatar';
 import { createDotStore, startFakeDriver, type Connection, type DotStore } from '@doty/dot-state';
 import { postMessage, resolveToken } from './api.js';
-import { mountChat } from './chat.js';
+import { mountChat, type ChatMessage } from './chat.js';
 import { openEventStream, type StreamStatus } from './sse.js';
 import { applyFrame } from './wire.js';
-import { mountHarnessTeam, type HarnessNotice, type HarnessTeamOptions } from './harness.js';
+import { mountHarnessTeam, type HarnessNotice, type HarnessResponse, type HarnessTeamOptions } from './harness.js';
+import { subscribeQuestions } from './questions.js';
 import {
+  AUTO_CLOSE_RANGE,
   DOTY_RANGE,
   ORBITAL_RANGE,
   ORBIT_RANGE,
@@ -33,6 +36,7 @@ const connectionEl = document.getElementById('connection');
 const app = document.getElementById('app');
 const stage = document.getElementById('stage');
 const speech = document.getElementById('speech');
+const speechText = document.getElementById('speech-text');
 
 if (!(avatarHost instanceof HTMLElement) || !(avatarSlot instanceof HTMLElement)) {
   throw new Error('Doty webview: #avatar / #avatar-slot missing from index.html');
@@ -50,10 +54,13 @@ const harnessOptions = (): HarnessTeamOptions => ({
   dotSize: settings.orbitalSize,
   dotySize: settings.dotySize,
   onNotice: handleNotice,
+  onResponse: handleResponse,
+  onOrbitalSelect: () => {
+    if (app?.classList.contains('collapsed')) void setPanelOpen(true);
+  },
 });
 
 let avatar = mountAvatar(avatarMount, store, { size: settings.dotySize });
-let harnessTeam = mountHarnessTeam(slotMount, harnessOptions());
 
 const token = resolveToken();
 let serverUrl = settings.serverUrl;
@@ -75,6 +82,10 @@ store.subscribe((state) => {
 
 let stream: ReturnType<typeof openEventStream> | undefined;
 
+// Highest server seq that belongs to replay, captured from the `hello` cursor.
+// Frames at or below it are history: they fill the chat but must not bubble.
+let replayCursor = 0;
+
 const chat = mountChat({
   serverUrl,
   lastSeq: () => stream?.lastSeq() ?? 0,
@@ -82,6 +93,23 @@ const chat = mountChat({
   onServerUrl() {
     // Server changes go through the settings view.
   },
+  onMessage: handleChatMessage,
+});
+
+// Mount the harness team after the chat so local agent responses can be
+// appended to it as they arrive.
+let harnessTeam = mountHarnessTeam(slotMount, harnessOptions());
+
+// Pending T3 questions: pinned at the end of the chat, with a heads-up bubble.
+const unsubscribeQuestions = subscribeQuestions((list) => {
+  chat.setPendingQuestions(list);
+  if (list.length === 0) return;
+  const label = list.length === 1
+    ? '1 hilo esperando respuesta'
+    : `${list.length} hilos esperando respuesta`;
+  store.dispatch({ type: 'activity', value: 'waiting_approval', label });
+  store.dispatch({ type: 'emotion', value: 'curious' });
+  showSpeechText('attention', `${label} en T3. Mira el chat de Doty para copiar tu respuesta.`);
 });
 
 stream = openEventStream({
@@ -89,9 +117,14 @@ stream = openEventStream({
   token: () => token,
   onUnauthorized: () => chat.showAuthError(),
   onFrame(frame) {
+    if (frame.type === 'hello') {
+      const cursor = readHelloCursor(frame.data);
+      if (cursor !== undefined) replayCursor = cursor;
+    }
     try {
       applyFrame(store, frame);
-      chat.ingest(frame);
+      const live = frame.seq === undefined || frame.seq > replayCursor;
+      chat.ingest(frame, live);
     } catch (error) {
       console.warn('[doty] dropped a malformed event:', error);
     }
@@ -134,6 +167,13 @@ function disengageFallback(): void {
   store.dispatch({ type: 'reset' });
 }
 
+/** The `hello` frame's `cursor`: highest seq at connect time (replay boundary). */
+function readHelloCursor(data: unknown): number | undefined {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) return undefined;
+  const cursor = (data as Record<string, unknown>).cursor;
+  return typeof cursor === 'number' && Number.isFinite(cursor) ? cursor : undefined;
+}
+
 // ---------------------------------------------------------------------------
 // Session notices: speech bubble + avatar reaction
 // ---------------------------------------------------------------------------
@@ -148,23 +188,174 @@ function handleNotice(notice: HarnessNotice): void {
   const reaction = REACTION[notice.kind];
   store.dispatch({ type: 'activity', value: reaction.activity, label: `${notice.harness} ${reaction.label}` });
   store.dispatch({ type: 'emotion', value: reaction.emotion });
-  showSpeech(notice);
+  if (notice.kind !== 'done' || settings.showTaskFinishedBubble) showSpeech(notice);
+}
+
+/**
+ * A watched thread produced an agent response — a final reply or a reasoning
+ * block. Show it in Doty's chat, labelled with where it came from. The text is
+ * local-only and is never POSTed to the server.
+ */
+function handleResponse(response: HarnessResponse): void {
+  const note = response.project ? `${response.harness} · ${response.project}` : response.harness;
+  chat.addHarnessResponse({
+    key: `${response.harness}:${response.sessionId}:${response.ts}:${response.kind}`,
+    text: response.text,
+    note,
+    kind: response.kind,
+  });
+}
+
+/**
+ * Mirror a live chat row as a dialogue bubble on the character, so messages are
+ * visible even while the chat panel is closed. Replayed history never reaches
+ * here (see `replayCursor` in the stream handler).
+ */
+function handleChatMessage(message: ChatMessage): void {
+  const body = bubblePreview(message.text);
+  if (!body) return;
+  const kind = message.variant === 'reasoning'
+    ? 'thinking'
+    : message.role === 'user'
+      ? 'user'
+      : message.role === 'assistant' && message.tone !== 'error'
+        ? 'reply'
+        : 'error';
+  showSpeechText(kind, `${speakerFor(message)}: ${body}`, 6_000);
+}
+
+function speakerFor(message: ChatMessage): string {
+  if (message.role === 'user') return 'Tú';
+  if (message.role === 'assistant') return message.note ?? 'Doty';
+  return 'Aviso';
+}
+
+/** Flatten markdown into a short single-line preview for the speech bubble. */
+function bubblePreview(text: string): string {
+  const flat = text
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/^\s{0,3}#{1,6}\s+/gm, '')
+    .replace(/^\s{0,3}>\s?/gm, '')
+    .replace(/^\s{0,3}(?:[-*+]|\d+\.)\s+/gm, '• ')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/__([^_]+)__/g, '$1')
+    .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1$2')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return flat.length > 500 ? `${flat.slice(0, 499)}…` : flat;
 }
 
 let speechTimer = 0;
+let speechOpen = false;
+let speechFitToken = 0;
+const SPEECH_EDGE = 10;
+/** Gap between the bubble's tail and the orbit area. */
+const SPEECH_GAP = 10;
+/** Top margin of the bubble inside the expanded window. */
+const SPEECH_TOP = 4;
+
 function showSpeech(notice: HarnessNotice): void {
+  showSpeechText(notice.kind, notice.summary);
+}
+
+function showSpeechText(kind: string, text: string, durationMs = 12_000): void {
   if (!(speech instanceof HTMLElement)) return;
-  speech.dataset.kind = notice.kind;
-  speech.textContent = notice.summary;
+  speech.dataset.kind = kind;
+  if (speechText instanceof HTMLElement) speechText.textContent = text;
   speech.hidden = false;
+  speechOpen = true;
+  void fitSpeechWindow(true);
   window.clearTimeout(speechTimer);
-  speechTimer = window.setTimeout(() => {
-    if (speech instanceof HTMLElement) speech.hidden = true;
-  }, 12_000);
+  speechTimer = window.setTimeout(() => hideSpeech(), durationMs);
+}
+
+/** Hide the bubble, shrinking the window back to the collapsed size. */
+function hideSpeech(resize = true): void {
+  window.clearTimeout(speechTimer);
+  if (speech instanceof HTMLElement) speech.hidden = true;
+  speechOpen = false;
+  if (resize) void fitSpeechWindow(false);
+}
+
+/**
+ * Grow (or shrink) the collapsed window so the whole bubble fits, keeping the
+ * character at the same screen position. A vertical-only growth would cover the
+ * character, so while a bubble is shown the character is anchored to the bottom
+ * and the window extends upward.
+ */
+async function fitSpeechWindow(show: boolean): Promise<void> {
+  if (!(speech instanceof HTMLElement)) return;
+  // The panel owns the window geometry; just drop the collapsed layout flag.
+  if (!IS_TAURI || panelOpen) {
+    if (!show) app?.classList.remove('speech-open');
+    return;
+  }
+  const token = ++speechFitToken;
+  try {
+    const [api, dpi] = await Promise.all([
+      import('@tauri-apps/api/window'),
+      import('@tauri-apps/api/dpi'),
+    ]);
+    if (token !== speechFitToken) return;
+    const win = api.getCurrentWindow();
+    const scale = await win.scaleFactor();
+    // Measure the character before changing the layout so it does not jump.
+    const local = characterLocalCenter();
+    const pos = await win.outerPosition();
+    const target = local
+      ? { x: pos.x + local.x * scale, y: pos.y + local.y * scale }
+      : { x: pos.x, y: pos.y };
+
+    app?.classList.toggle('speech-open', show);
+
+    const base = collapsedDims();
+    let width = base.width;
+    let height = base.height;
+    if (show) {
+      // The character is anchored to the bottom; size the window so the bubble
+      // sits just above the orbit area instead of floating at the top.
+      const slotH = avatarSlot instanceof HTMLElement
+        ? Math.max(96, Math.ceil(avatarSlot.getBoundingClientRect().height))
+        : Math.max(96, Math.round(settings.orbitSize));
+      app?.style.setProperty('--slot-h', `${slotH}px`);
+      const rect = speech.getBoundingClientRect();
+      width = Math.max(base.width, Math.ceil(rect.width) + 2 * SPEECH_EDGE);
+      height = Math.max(base.height, SPEECH_TOP + Math.ceil(rect.height) + SPEECH_GAP + slotH);
+    }
+    const monitor = await api.currentMonitor();
+    if (monitor) {
+      width = Math.min(width, Math.max(220, Math.floor(monitor.size.width / scale) - 16));
+      height = Math.min(height, Math.max(220, Math.floor(monitor.size.height / scale) - 16));
+    }
+    await win.setSize(new dpi.PhysicalSize(Math.round(width * scale), Math.round(height * scale)));
+    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    if (token !== speechFitToken) return;
+    const baseLocal = characterBaseCenter();
+    if (!baseLocal) return;
+    const desiredX = Math.round(target.x - baseLocal.x * scale);
+    const desiredY = Math.round(target.y - baseLocal.y * scale);
+    let x = desiredX;
+    let y = desiredY;
+    let shiftX = 0;
+    // Only clamp horizontally while growing: hiding restores the user's own
+    // placement, and the bubble's height already fits the monitor in practice.
+    if (monitor && show) {
+      const winW = Math.round(width * scale);
+      const cx = Math.min(Math.max(desiredX, monitor.position.x), monitor.position.x + monitor.size.width - winW);
+      shiftX = (desiredX - cx) / scale;
+      x = cx;
+    }
+    setDotyShift(shiftX, 0);
+    await win.setPosition(new dpi.PhysicalPosition(x, y));
+  } catch {
+    // Window control unavailable; the bubble still shows in the webview.
+  }
 }
 
 speech?.addEventListener('click', () => {
-  if (speech instanceof HTMLElement) speech.hidden = true;
+  hideSpeech(false);
   void setPanelOpen(true);
 });
 
@@ -180,6 +371,9 @@ const serverField = document.getElementById('setting-server');
 const orbitField = document.getElementById('setting-orbit');
 const orbitalField = document.getElementById('setting-orbital');
 const dotyField = document.getElementById('setting-doty');
+const taskBubbleField = document.getElementById('setting-task-bubble');
+const autoCloseField = document.getElementById('setting-auto-close');
+const autoCloseValue = document.getElementById('setting-auto-close-value');
 const orbitValue = document.getElementById('setting-orbit-value');
 const orbitalValue = document.getElementById('setting-orbital-value');
 const dotyValue = document.getElementById('setting-doty-value');
@@ -187,13 +381,23 @@ const dotyValue = document.getElementById('setting-doty-value');
 function showSettings(show: boolean): void {
   if (settingsPanel instanceof HTMLElement) settingsPanel.hidden = !show;
   if (chatPanel instanceof HTMLElement) chatPanel.hidden = show;
-  if (show) void setPanelOpen(true);
+  if (show) {
+    void setPanelOpen(true);
+    clearAutoClose();
+  } else {
+    scheduleAutoClose();
+  }
 }
 
 function applySettings(next: DotySettings): void {
   const previous = settings;
   settings = normalizeSettings(next);
   saveSettings(settings);
+
+  if (previous.showTaskFinishedBubble && !settings.showTaskFinishedBubble
+    && speech instanceof HTMLElement && speech.dataset.kind === 'done') {
+    hideSpeech();
+  }
 
   if (settings.dotySize !== previous.dotySize) {
     avatar.destroy();
@@ -205,11 +409,16 @@ function applySettings(next: DotySettings): void {
     harnessTeam.destroy();
     harnessTeam = mountHarnessTeam(slotMount, harnessOptions());
   }
-  if (orbitChanged && !panelOpen) void applyCollapsedSize();
+  if (orbitChanged && !panelOpen) void (speechOpen ? fitSpeechWindow(true) : applyCollapsedSize());
+  if (settings.autoCloseSeconds !== previous.autoCloseSeconds) scheduleAutoClose();
   if (settings.serverUrl !== previous.serverUrl) {
     serverUrl = settings.serverUrl;
     stream?.restart();
   }
+}
+
+function autoCloseLabel(seconds: number): string {
+  return seconds > 0 ? `${seconds}s` : 'off';
 }
 
 function syncSettingFields(): void {
@@ -224,6 +433,15 @@ function syncSettingFields(): void {
     dotyField.max = String(DOTY_RANGE.max);
     dotyField.value = String(settings.dotySize);
   }
+  if (taskBubbleField instanceof HTMLInputElement) {
+    taskBubbleField.checked = settings.showTaskFinishedBubble;
+  }
+  if (autoCloseField instanceof HTMLInputElement) {
+    autoCloseField.min = String(AUTO_CLOSE_RANGE.min);
+    autoCloseField.max = String(AUTO_CLOSE_RANGE.max);
+    autoCloseField.value = String(settings.autoCloseSeconds);
+  }
+  if (autoCloseValue) autoCloseValue.textContent = autoCloseLabel(settings.autoCloseSeconds);
   if (orbitalField instanceof HTMLInputElement) {
     orbitalField.min = String(ORBITAL_RANGE.min);
     orbitalField.max = String(ORBITAL_RANGE.max);
@@ -262,18 +480,58 @@ dotyField?.addEventListener('input', () => {
 dotyField?.addEventListener('change', () => {
   if (dotyField instanceof HTMLInputElement) applySettings({ ...settings, dotySize: Number(dotyField.value) });
 });
+taskBubbleField?.addEventListener('change', () => {
+  if (taskBubbleField instanceof HTMLInputElement) {
+    applySettings({ ...settings, showTaskFinishedBubble: taskBubbleField.checked });
+  }
+});
+autoCloseField?.addEventListener('input', () => {
+  if (autoCloseField instanceof HTMLInputElement && autoCloseValue) {
+    autoCloseValue.textContent = autoCloseLabel(Number(autoCloseField.value));
+  }
+});
+autoCloseField?.addEventListener('change', () => {
+  if (autoCloseField instanceof HTMLInputElement) {
+    applySettings({ ...settings, autoCloseSeconds: Number(autoCloseField.value) });
+  }
+});
+
+// Auto-close on idle: any interaction inside the window resets the countdown.
+for (const type of ['pointerdown', 'pointermove', 'keydown', 'wheel'] as const) {
+  window.addEventListener(type, () => {
+    if (panelOpen) scheduleAutoClose();
+  }, { passive: true });
+}
 
 // ---------------------------------------------------------------------------
 // Window: collapse/expand + dragging
 // ---------------------------------------------------------------------------
 
 const PANEL = { width: 380, height: 560 };
-const EDGE = 8;
-const CHAR_ANCHOR = 72;
 let panelOpen = false;
-let charScreen: { x: number; y: number } | null = null;
+let panelTransition = false;
+let autoCloseTimer = 0;
 
-/** The collapsed window must fit the orbit area, whatever the slider says. */
+/** (Re)start the idle auto-close countdown while the chat is open. */
+function scheduleAutoClose(): void {
+  window.clearTimeout(autoCloseTimer);
+  const seconds = settings.autoCloseSeconds;
+  if (!panelOpen || seconds <= 0 || settingsVisible()) return;
+  autoCloseTimer = window.setTimeout(() => {
+    if (panelOpen && !settingsVisible()) void setPanelOpen(false);
+  }, seconds * 1000);
+}
+
+function clearAutoClose(): void {
+  window.clearTimeout(autoCloseTimer);
+}
+
+/** True while the settings view is showing (auto-close does not apply to it). */
+function settingsVisible(): boolean {
+  return settingsPanel instanceof HTMLElement && !settingsPanel.hidden;
+}
+
+/** The collapsed window must fit the orbit area and the character. */
 function collapsedDims(): { width: number; height: number } {
   const side = Math.max(
     220,
@@ -298,80 +556,173 @@ async function applyCollapsedSize(): Promise<void> {
   }
 }
 
-function clamp(value: number, lo: number, hi: number): number {
-  return Math.min(Math.max(value, lo), Math.max(lo, hi));
+/** Character center in CSS pixels within the webview (0,0 = window top-left). */
+function characterLocalCenter(): { x: number; y: number } | null {
+  const el = avatar.element;
+  if (!(el instanceof HTMLElement)) return null;
+  const rect = el.getBoundingClientRect();
+  return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+}
+
+// Offset of the character *inside* the window. Used when the window is clamped
+// to the monitor: the window shifts to fit, the character shifts back so Doty
+// stays at the same spot on screen. The bubble counter-shifts to stay centered.
+let dotyShiftX = 0;
+let dotyShiftY = 0;
+
+function setDotyShift(x: number, y: number): void {
+  dotyShiftX = x;
+  dotyShiftY = y;
+  app?.style.setProperty('--doty-shift-x', `${x}px`);
+  app?.style.setProperty('--doty-shift-y', `${y}px`);
+  if (speech instanceof HTMLElement) {
+    speech.style.setProperty('--speech-shift-x', `${-x}px`);
+    speech.style.setProperty('--speech-shift-y', `${-y}px`);
+    speech.style.setProperty('--speech-tail-dx', `${x}px`);
+  }
+}
+
+/** Character center with the clamp offset removed (its un-shifted position). */
+function characterBaseCenter(): { x: number; y: number } | null {
+  const local = characterLocalCenter();
+  if (!local) return null;
+  return { x: local.x - dotyShiftX, y: local.y - dotyShiftY };
 }
 
 async function setPanelOpen(open: boolean): Promise<void> {
-  if (open === panelOpen) return;
-  panelOpen = open;
-  app?.classList.toggle('collapsed', !open);
-  if (!open) showSettings(false);
-
-  if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
-    if (open) document.getElementById('composer-input')?.focus();
-    return;
-  }
-
+  if (open === panelOpen || panelTransition) return;
+  panelTransition = true;
   try {
-    const api = await import('@tauri-apps/api/window');
-    const dpi = await import('@tauri-apps/api/dpi');
-    const win = api.getCurrentWindow();
-    const scale = await win.scaleFactor();
-    const pos = await win.outerPosition();
-    const cur = await win.outerSize();
-    const monitor = await api.currentMonitor();
-    const mon = monitor
-      ? { x: monitor.position.x, y: monitor.position.y, w: monitor.size.width, h: monitor.size.height }
-      : { x: 0, y: 0, w: 1920 * scale, h: 1080 * scale };
+    // Read the character position and native window data before the layout
+    // changes. Otherwise the chat panel moves Doty before we can measure it.
+    const localBefore = characterLocalCenter();
+    type CurrentWindow = ReturnType<(typeof import('@tauri-apps/api/window'))['getCurrentWindow']>;
+    let win: CurrentWindow | undefined;
+    let dpi: typeof import('@tauri-apps/api/dpi') | undefined;
+    let scale: number | undefined;
+    let mon: { x: number; y: number; w: number; h: number } | undefined;
+    let target: { x: number; y: number } | undefined;
 
-    const cw = collapsedDims().width * scale;
-    const ch = collapsedDims().height * scale;
-    const pw = PANEL.width * scale;
-    const ph = PANEL.height * scale;
-    const edge = EDGE * scale;
-    const anchor = CHAR_ANCHOR * scale;
+    if (IS_TAURI) {
+      try {
+        const [api, dpiApi] = await Promise.all([
+          import('@tauri-apps/api/window'),
+          import('@tauri-apps/api/dpi'),
+        ]);
+        win = api.getCurrentWindow();
+        dpi = dpiApi;
+        scale = await win.scaleFactor();
+        const [monitor, pos, size] = await Promise.all([
+          api.currentMonitor(),
+          win.outerPosition(),
+          win.outerSize(),
+        ]);
+        mon = monitor
+          ? { x: monitor.position.x, y: monitor.position.y, w: monitor.size.width, h: monitor.size.height }
+          : { x: 0, y: 0, w: 1920 * scale, h: 1080 * scale };
+        target = localBefore
+          ? { x: pos.x + localBefore.x * scale, y: pos.y + localBefore.y * scale }
+          : { x: pos.x + size.width / 2, y: pos.y + size.height / 2 };
+      } catch {
+        // The panel still opens in the webview if native window APIs fail.
+      }
+    }
 
-    if (!open) {
-      const cx = charScreen ? charScreen.x : pos.x + cur.width / 2;
-      const cy = charScreen ? charScreen.y : pos.y + cur.height / 2;
-      const left = clamp(cx - cw / 2, mon.x + edge, mon.x + mon.w - cw - edge);
-      const top = clamp(cy - ch / 2, mon.y + edge, mon.y + mon.h - ch - edge);
-      app?.classList.remove('upward');
-      await win.setSize(new dpi.PhysicalSize(Math.round(cw), Math.round(ch)));
-      await win.setPosition(new dpi.PhysicalPosition(Math.round(left), Math.round(top)));
-      charScreen = { x: left + cw / 2, y: top + ch / 2 };
+    panelOpen = open;
+    app?.classList.toggle('collapsed', !open);
+    if (open) app?.classList.remove('speech-open');
+    if (!open) showSettings(false);
+
+    if (!IS_TAURI || !win || !dpi || !scale || !mon || !target) {
+      if (open) {
+        document.getElementById('composer-input')?.focus();
+        scheduleAutoClose();
+      } else {
+        clearAutoClose();
+      }
       return;
     }
 
-    const charX = charScreen ? charScreen.x : pos.x + cur.width / 2;
-    const charY = charScreen ? charScreen.y : pos.y + cur.height / 2;
-    const roomDown = mon.y + mon.h - charY;
-    const roomUp = charY - mon.y;
+    const currentWindow = win;
+    const dpiApi = dpi;
+    const scaleFactor = scale;
+    const monitorBounds = mon;
+    const screenTarget = target;
+    const roomDown = monitorBounds.y + monitorBounds.h - screenTarget.y;
+    const roomUp = screenTarget.y - monitorBounds.y;
     const goDown = roomDown >= roomUp;
-    const avail = (goDown ? roomDown : roomUp) + anchor - edge;
-    const height = Math.round(Math.min(ph, Math.max(280 * scale, avail)));
+    app?.classList.toggle('upward', open && !goDown);
+    if (!open) app?.classList.remove('upward');
 
-    app?.classList.toggle('upward', !goDown);
+    // Wait for CSS and native resizing. Then place the window from the
+    // character's new local position, so the character stays at screenTarget.
+    const waitForLayout = async (): Promise<void> => {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    };
+    const placeCharacterAtTarget = async (clampToMonitor: boolean): Promise<void> => {
+      await waitForLayout();
+      const local = characterBaseCenter();
+      if (!local) return;
+      const desiredX = Math.round(screenTarget.x - local.x * scaleFactor);
+      const desiredY = Math.round(screenTarget.y - local.y * scaleFactor);
+      let x = desiredX;
+      let y = desiredY;
+      let shiftX = 0;
+      let shiftY = 0;
+      if (clampToMonitor) {
+        const size = await currentWindow.outerSize();
+        const cx = Math.min(Math.max(desiredX, monitorBounds.x), monitorBounds.x + monitorBounds.w - size.width);
+        const cy = Math.min(Math.max(desiredY, monitorBounds.y), monitorBounds.y + monitorBounds.h - size.height);
+        shiftX = (desiredX - cx) / scaleFactor;
+        shiftY = (desiredY - cy) / scaleFactor;
+        x = cx;
+        y = cy;
+      }
+      setDotyShift(shiftX, shiftY);
+      await currentWindow.setPosition(new dpiApi.PhysicalPosition(x, y));
+    };
 
-    const left = clamp(charX - pw / 2, mon.x + edge, mon.x + mon.w - pw - edge);
-    const top = goDown
-      ? clamp(charY - anchor, mon.y + edge, mon.y + mon.h - height - edge)
-      : clamp(charY + anchor - height, mon.y + edge, mon.y + mon.h - height - edge);
+    if (!open) {
+      const dims = collapsedDims();
+      await currentWindow.setSize(new dpiApi.PhysicalSize(
+        Math.round(dims.width * scaleFactor),
+        Math.round(dims.height * scaleFactor),
+      ));
+      await placeCharacterAtTarget(false);
+      if (speechOpen) void fitSpeechWindow(true);
+      clearAutoClose();
+      return;
+    }
 
-    await win.setSize(new dpi.PhysicalSize(Math.round(pw), height));
-    await win.setPosition(new dpi.PhysicalPosition(Math.round(left), Math.round(top)));
-    charScreen = { x: left + pw / 2, y: goDown ? top + anchor : top + height - anchor };
+    const width = Math.round(PANEL.width * scaleFactor);
+    const panelHeight = Math.round(PANEL.height * scaleFactor);
+    const height = Math.round(Math.min(panelHeight, Math.max(280 * scaleFactor, goDown ? roomDown : roomUp)));
+    await currentWindow.setSize(new dpiApi.PhysicalSize(width, height));
+    await placeCharacterAtTarget(true);
     document.getElementById('composer-input')?.focus();
+    scheduleAutoClose();
   } catch {
     // Window control unavailable; the panel still toggles via CSS.
+  } finally {
+    panelTransition = false;
   }
 }
 
 const IS_TAURI = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 if (IS_TAURI) void applyCollapsedSize();
+let unlistenTraySettings: (() => void) | undefined;
+let unlistenFocus: (() => void) | undefined;
 
 if (IS_TAURI) {
+  void import('@tauri-apps/api/event')
+    .then(async ({ listen }) => {
+      unlistenTraySettings = await listen('doty://settings', () => showSettings(true));
+    })
+    .catch(() => {
+      // The tray Settings action still shows the main window if this listener fails.
+    });
+
   void import('@tauri-apps/api/core')
     .then(({ invoke }) => invoke('stub_report'))
     .then((report) => {
@@ -382,7 +733,12 @@ if (IS_TAURI) {
     });
 
   void import('@tauri-apps/api/window')
-    .then(({ getCurrentWindow }) => {
+    .then(async ({ getCurrentWindow }) => {
+      // Clicking another window closes the chat.
+      unlistenFocus = await getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+        if (!focused && panelOpen) void setPanelOpen(false);
+      });
+
       stage?.addEventListener('mousedown', (event) => {
         if (event.button !== 0) return;
         const target = event.target;
@@ -429,8 +785,12 @@ if (IS_TAURI) {
 }
 
 window.addEventListener('beforeunload', () => {
+  unlistenTraySettings?.();
+  unlistenFocus?.();
+  clearAutoClose();
   stream?.stop();
   stopDriver?.();
+  unsubscribeQuestions();
   harnessTeam.destroy();
   avatar.destroy();
 });

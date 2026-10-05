@@ -55,3 +55,12 @@ pub fn has_columns(conn: &Connection, table: &str, columns: &[&str]) -> Result<b
         .collect::<rusqlite::Result<_>>()?;
     Ok(columns.iter().all(|column| actual.contains(*column)))
 }
+
+/// Open a SQLite database for writing (the T3 effect outbox). Waits briefly on
+/// a busy database instead of failing, because the harness also writes it.
+pub fn open_read_write(path: &Path) -> Result<Connection> {
+    let conn = Connection::open(path)
+        .with_context(|| format!("open SQLite database for writing {}", path.display()))?;
+    conn.busy_timeout(std::time::Duration::from_millis(5_000))?;
+    Ok(conn)
+}

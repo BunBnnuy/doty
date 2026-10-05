@@ -16,19 +16,41 @@ The brains live in `apps/server`.
 - Codex, OpenCode and T3 watchers start with the shell and stop on exit. Their
   local sessions appear as orbiting satellite dots; click or keyboard-activate
   one for harness, session, project, status and last-activity metadata.
+- New agent responses from any watched session appear in Doty's chat as Doty
+  messages, labelled `harness · project`. This is local-only: the text is never
+  POSTed and never reaches the server.
+- Pending T3 questions appear as an interactive card at the end of the chat.
+  Selecting an option answers them **from Doty**: it enqueues T3's own
+  `runtime-request.respond` effect (see below) and T3 applies it, so you never
+  type the answer into T3.
 
 ## Harness satellites
 
 The Rust bridge uses `doty-harness` in finite background polling passes (every
 two seconds), with fingerprints including SQLite WAL files. It retains the last
 `HarnessStatus` per harness/session, emits `harness://status`, and exposes
-`harness_statuses` for webview startup/reload hydration. Raw events, transcript
-`text`, tool arguments and adapter error context never enter this bridge's IPC
-or the online chat/server path. Running/thinking/tool-calling sessions go stale
+`harness_statuses` for webview startup/reload hydration. It also carries each
+session's recent activity lines, including assistant `text`, over **local IPC
+only**; that text is rendered in the details panel and appended to the chat, and
+is never handed to a network transport. Tool arguments and adapter error context
+never enter this bridge's IPC. Running/thinking/tool-calling sessions go stale
 after two minutes without activity; approvals remain waiting until updated.
 
-Active sessions remain visible; idle/done/error/stale sessions remain visible
-for ten minutes after their real last activity. Older statuses remain in memory.
+Answering a T3 question is a deliberate, best-effort write, not a read: Doty
+validates that the request is still pending, then inserts one
+`runtime-request.respond` row into T3's own `orchestration_v2_effect_outbox`
+(the same effect T3 writes when you answer in its UI). T3's effect worker polls
+that table and applies it, so no T3 credential or API is needed. This is
+unsupported by T3 and only safe because the row is indistinguishable from one
+T3 would write; if the schema changes, writes fail closed and the card falls
+back to copy-to-clipboard.
+
+Active sessions remain visible. Done, idle, and error sessions remain visible
+for two minutes after their last event. Stale sessions remain visible for up to
+four minutes after their last event, which gives a stale marker about two minutes
+on screen after the two-minute stale threshold. The UI drops expired activity
+lines unless a user has that session open. Status metadata remains in the local
+store; the native watcher keeps its snapshots until Doty exits.
 Codex is mint, OpenCode violet, T3 blue; the border/badge shows activity:
 thinking `…`, tools `↻`, approval `?`, done `✓`, error `!`, stale `–`.
 Motion respects `prefers-reduced-motion`; pointing/focusing pauses an orbiting

@@ -5,6 +5,10 @@ export interface OpenAIConfig {
   apiKey?: string;
   model: string;
   timeoutMs?: number;
+  /** Sent as User-Agent; OpenCode Go asks clients to identify themselves. */
+  userAgent?: string;
+  /** Sent as x-opencode-session so the gateway can route and cache. */
+  sessionId?: string;
 }
 
 export function openAIConfigFromEnv(env: NodeJS.ProcessEnv = process.env): OpenAIConfig {
@@ -14,6 +18,8 @@ export function openAIConfigFromEnv(env: NodeJS.ProcessEnv = process.env): OpenA
     baseUrl: env.OPENAI_BASE_URL?.trim() || 'https://api.openai.com/v1',
     apiKey: env.OPENAI_API_KEY,
     model,
+    userAgent: env.OPENAI_USER_AGENT?.trim() || 'doty/0.1',
+    sessionId: env.OPENAI_SESSION_ID?.trim() || 'doty-default',
   };
 }
 
@@ -109,6 +115,8 @@ export class OpenAIChatProvider implements ChatProvider {
       Accept: 'text/event-stream',
     };
     if (this.config.apiKey) headers.Authorization = `Bearer ${this.config.apiKey}`;
+    headers['User-Agent'] = this.config.userAgent ?? 'doty/0.1';
+    headers['x-opencode-session'] = this.config.sessionId ?? 'doty-default';
     const response = await this.fetchImpl(`${this.config.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
       method: 'POST',
       headers,

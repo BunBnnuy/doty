@@ -133,4 +133,26 @@ describe('mountSatellites (additive avatar API)', () => {
     handle.setStatuses([status()]);
     expect(frames.size).toBe(0);
   });
+
+  it('pops a leaving satellite out, removing it only after the animation', () => {
+    const timers = new Map<number, () => void>();
+    let nextId = 0;
+    vi.stubGlobal('window', {
+      setTimeout: (callback: () => void) => { timers.set(++nextId, callback); return nextId; },
+      clearTimeout: (key: number) => { timers.delete(key); },
+    });
+    const feed = source([status('one'), status('two')]);
+    const handle = mountSatellites(new Node('div') as unknown as HTMLElement, feed.source, { reducedMotion: false });
+    const [leaving, staying] = buttons(handle.element) as [Node, Node];
+
+    feed.emit([status('two')]);
+    // Still mounted while it scales out, flagged for the pop animation.
+    expect(buttons(handle.element)).toHaveLength(2);
+    expect(leaving.getAttribute('data-popping')).toBe('true');
+
+    for (const callback of [...timers.values()]) callback();
+    expect(buttons(handle.element)).toHaveLength(1);
+    expect(buttons(handle.element)[0]).toBe(staying);
+    handle.destroy();
+  });
 });

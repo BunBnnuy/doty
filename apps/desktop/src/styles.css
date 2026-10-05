@@ -36,6 +36,8 @@ body {
   display: grid;
   place-items: center;
   flex: 0 0 auto;
+  /* Clamp offset: lets the window shift on screen while Doty stays put. */
+  transform: translate(var(--doty-shift-x, 0px), var(--doty-shift-y, 0px));
 }
 
 #app.collapsed #stage,
@@ -128,7 +130,7 @@ body {
 
 #harness-details {
   flex: 0 1 auto;
-  max-height: 165px;
+  max-height: 280px;
   overflow-y: auto;
   margin: 0 8px 8px;
   padding: 8px;
@@ -276,6 +278,15 @@ body {
   border-radius: 12px 12px 12px 4px;
   padding: 5px 8px;
 }
+
+/* A watched agent's reasoning block: visible, but clearly not a Doty reply. */
+.msg.is-reasoning .msg-text {
+  background: transparent;
+  border: 1px dashed var(--line);
+  color: var(--muted);
+  font-style: italic;
+}
+.msg.is-reasoning .msg-meta { font-style: italic; }
 
 .msg-run {
   flex-direction: row;
@@ -434,19 +445,31 @@ button:hover {
 .msg-markdown td { border: 1px solid var(--line); padding: 2px 6px; }
 .msg-markdown hr { border: 0; border-top: 1px solid var(--line); margin: 6px 0; }
 
-/* Harness session activity feed (local only). */
-.harness-activity-title {
-  margin: 10px 0 4px;
+.harness-brief {
+  display: grid;
+  gap: 8px;
+  margin: 8px 0;
+}
+.harness-brief h3 {
+  margin: 0 0 2px;
   font-size: 11px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--muted);
 }
+.harness-brief p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+#harness-response { max-height: 120px; overflow-y: auto; }
+.harness-log > summary { margin: 6px 0; color: var(--muted); cursor: pointer; }
+/* Harness session activity feed (local only). */
 #harness-activity {
   list-style: none;
   margin: 0;
   padding: 0;
-  max-height: 220px;
+  max-height: 160px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -473,34 +496,50 @@ button:hover {
 .ha-time { flex: 0 0 auto; color: var(--muted); font-size: 10px; }
 .ha-empty { color: var(--muted); font-size: 12px; }
 
-/* Speech bubble for session notices. */
+/* Speech bubble for session notices, chat messages and questions. */
 #stage { position: relative; }
 #speech {
   position: absolute;
   top: 2px;
   left: 50%;
   transform: translateX(-50%);
-  max-width: 210px;
-  max-height: 62px;
-  overflow: hidden;
-  padding: 6px 9px;
+  margin-left: var(--speech-shift-x, 0px);
+  margin-top: var(--speech-shift-y, 0px);
+  /* `max-content` (not auto) so `left:50%` does not squeeze it to half the
+     window; `max-width` caps and wraps long text. */
+  width: max-content;
+  max-width: 440px;
+  padding: 7px 10px;
   border-radius: 10px;
   background: rgba(20, 18, 32, 0.95);
   border: 1px solid var(--line);
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
-  font-size: 11.5px;
-  line-height: 1.35;
-  white-space: pre-wrap;
+  font-size: 12px;
+  line-height: 1.4;
   color: var(--ink);
   z-index: 5;
   pointer-events: auto;
   cursor: pointer;
+  overflow: visible;
+}
+/* Scrolling lives on the inner span so the bubble tail is never clipped. */
+#speech-text {
+  display: block;
+  max-height: 320px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 #speech[hidden] { display: none; }
+/* With the chat open the full text is already visible, so keep the bubble short
+   and inside the panel window instead of covering the conversation. */
+#app:not(.collapsed) #speech { max-width: calc(100% - 16px); }
+#app:not(.collapsed) #speech-text { max-height: 96px; }
 #speech::after {
   content: "";
   position: absolute;
-  left: 50%;
+  left: calc(50% + var(--speech-tail-dx, 0px));
   bottom: -6px;
   width: 10px;
   height: 10px;
@@ -509,9 +548,19 @@ button:hover {
   border-right: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
 }
+/* While a bubble is shown collapsed, drop the character to the bottom of the
+   window and anchor the bubble just above its orbit, so there is no big gap. */
+#app.collapsed.speech-open #stage { align-items: end; }
+#app.collapsed.speech-open #speech {
+  top: auto;
+  bottom: calc(var(--slot-h, 150px) + 10px);
+}
 #speech[data-kind="done"] { border-color: rgba(134, 239, 172, 0.5); }
 #speech[data-kind="error"] { border-color: rgba(255, 133, 133, 0.65); }
 #speech[data-kind="attention"] { border-color: rgba(255, 202, 104, 0.65); }
+#speech[data-kind="user"] { border-color: rgba(108, 92, 255, 0.7); }
+#speech[data-kind="reply"] { border-color: rgba(134, 239, 172, 0.5); }
+#speech[data-kind="thinking"] { border-color: rgba(196, 181, 253, 0.65); }
 
 /* Settings view. */
 #settings-toggle {
@@ -534,6 +583,10 @@ button:hover {
   min-height: 0;
   overflow-y: auto;
   padding: 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
 }
 #panel[hidden],
 #settings[hidden],
@@ -551,5 +604,46 @@ button:hover {
 }
 .setting input[type="url"] { grid-column: 1 / -1; width: 100%; }
 .setting input[type="range"] { width: 100%; padding: 0; }
+.setting-checkbox { grid-template-columns: 1fr auto; }
+.setting input[type="checkbox"] { flex: 0 0 auto; width: 16px; min-width: 16px; margin: 0; accent-color: var(--accent); }
 .setting output { font-variant-numeric: tabular-nums; color: var(--ink); min-width: 30px; text-align: right; }
 .settings-note { margin: 4px 0 0; font-size: 11px; color: var(--muted); }
+
+/* Pending T3 questions, rendered as chat rows (local only). */
+.msg-question {
+  align-items: stretch;
+  gap: 5px;
+  padding: 7px;
+  border: 1px solid rgba(255, 202, 104, 0.45);
+  border-radius: 10px;
+  background: rgba(255, 202, 104, 0.08);
+}
+.question-meta { color: #ffca68; }
+.question-header { font-weight: 600; }
+.question-text { line-height: 1.4; overflow-wrap: anywhere; }
+.question-options { display: flex; flex-direction: column; gap: 5px; margin-top: 2px; }
+.question-option {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  text-align: left;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+.question-option:hover { background: rgba(255, 255, 255, 0.12); }
+.question-option.is-copied {
+  border-color: rgba(134, 239, 172, 0.7);
+  background: rgba(134, 239, 172, 0.14);
+}
+.qopt-label { font-size: 12.5px; color: var(--ink); }
+.qopt-desc { font-size: 11px; color: var(--muted); line-height: 1.35; }
+.question-status { font-size: 10.5px; color: var(--muted); line-height: 1.35; }
+.question-status.is-copied { color: #86efac; }
+.question-status.is-error { color: #ff8d86; }
+.question-custom { display: flex; gap: 6px; margin-top: 4px; }
+.question-custom input { flex: 1 1 auto; min-width: 0; font-size: 12px; }
+.msg-question.is-sent { opacity: 0.72; }

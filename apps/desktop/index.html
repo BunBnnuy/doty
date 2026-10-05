@@ -11,7 +11,7 @@
     <div id="app" class="collapsed" data-connection="reconnecting">
       <!-- Always visible: the character, its satellites, and the speech bubble. -->
       <div id="stage">
-        <div id="speech" role="status" hidden></div>
+        <div id="speech" role="status" hidden><span id="speech-text"></span></div>
         <div id="avatar-slot">
           <div id="avatar"></div>
           <div class="drag-catch"></div>
@@ -29,8 +29,15 @@
         <section id="harness-details" aria-label="Local harness session details" hidden>
           <div class="harness-heading"><strong>Local session</strong><button id="harness-close" type="button" aria-label="Close session details">×</button></div>
           <dl id="harness-fields"></dl>
-          <h3 class="harness-activity-title">Activity</h3>
-          <ol id="harness-activity"></ol>
+          <div class="harness-brief">
+            <section><h3>Task</h3><p id="harness-task"></p></section>
+            <section><h3>What happened</h3><p id="harness-what-happened"></p></section>
+            <section><h3>Agent response</h3><p id="harness-response"></p></section>
+          </div>
+          <details class="harness-log">
+            <summary>Activity log</summary>
+            <ol id="harness-activity"></ol>
+          </details>
           <p class="harness-privacy">Metadata + activity stay on this device · transcripts are never uploaded</p>
         </section>
         <div id="transcript">
@@ -76,6 +83,16 @@
           <input id="setting-doty" type="range" min="48" max="160" step="2" />
           <output id="setting-doty-value"></output>
         </label>
+        <label class="setting setting-checkbox">
+          <span>Show finished task bubbles</span>
+          <input id="setting-task-bubble" type="checkbox" />
+        </label>
+        <label class="setting">
+          <span>Auto-close chat</span>
+          <input id="setting-auto-close" type="range" min="0" max="600" step="5" />
+          <output id="setting-auto-close-value"></output>
+        </label>
+        <p class="settings-note">Auto-close closes the chat after that many seconds without interaction (0 = never).</p>
         <p class="settings-note">More settings coming soon.</p>
       </section>
     </div>

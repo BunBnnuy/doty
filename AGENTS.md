@@ -62,3 +62,11 @@ Useful flags: `-C/--cd`, `-s/--sandbox read-only|workspace-write|danger-full-acc
 `--worktree` (isolated managed git worktree), `-m/--model`, `--json` (JSONL
 events), `-o/--output-last-message`, `-i/--image`, `--ephemeral`,
 `--skip-git-repo-check`.
+
+## Deployment and change workflow
+
+- The Doty server is already running at `https://doty.killbunny.top`.
+- Make all project changes on server `kb` through SSH: `ssh kb`.
+- Do not start a local Doty desktop app or API unless the user asks for it.
+- Before changing files or restarting services, connect to `kb` and inspect the
+  current server state. Keep changes and runtime operations on that server.

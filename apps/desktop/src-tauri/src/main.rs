@@ -24,7 +24,7 @@ use tauri::{
     image::Image,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Manager, Runtime,
+    AppHandle, Emitter, Manager, Runtime,
 };
 
 /// Label of the floating-dot window, matching `tauri.conf.json`.
@@ -100,10 +100,10 @@ fn hide_main<R: Runtime>(app: &AppHandle<R>) {
 }
 
 fn install_tray<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
-    let show = MenuItem::with_id(app, "show", "Show Doty", true, None::<&str>)?;
+    let settings = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
     let hide = MenuItem::with_id(app, "hide", "Hide Doty", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit Doty", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &hide, &quit])?;
+    let close = MenuItem::with_id(app, "close", "Close Doty", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&settings, &hide, &close])?;
 
     TrayIconBuilder::with_id("doty-tray")
         .icon(dot_icon())
@@ -111,9 +111,12 @@ fn install_tray<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
-            "show" => show_main(app),
+            "settings" => {
+                show_main(app);
+                let _ = app.emit("doty://settings", ());
+            }
             "hide" => hide_main(app),
-            "quit" => app.exit(0),
+            "close" => app.exit(0),
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
@@ -182,7 +185,9 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             stub_report,
             harness::harness_statuses,
-            harness::harness_activity
+            harness::harness_activity,
+            harness::harness_questions,
+            harness::answer_question
         ])
         .setup(|app| {
             install_tray(app)?;

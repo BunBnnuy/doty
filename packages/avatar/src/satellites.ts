@@ -43,6 +43,8 @@ interface Satellite {
   dot: HTMLElement;
   badge: HTMLElement;
   angle: number;
+  /** Already scaled out; awaiting removal. */
+  removing?: boolean;
 }
 
 /**
@@ -67,7 +69,12 @@ export function mountSatellites(
   const style = document.createElement('style');
   style.textContent = `[data-doty-satellite]:focus-visible{outline:2px solid white!important;outline-offset:2px}
     [data-doty-satellite]:hover{filter:brightness(1.2)}
-    [data-doty-satellite]:focus-visible [data-satellite-dot]{box-shadow:0 0 0 2px #fff}`;
+    [data-doty-satellite]:focus-visible [data-satellite-dot]{box-shadow:0 0 0 2px #fff}
+    @keyframes doty-satellite-pop{0%{transform:scale(1);opacity:1}45%{transform:scale(1.45);opacity:1}100%{transform:scale(0);opacity:0}}
+    @keyframes doty-satellite-fade{to{opacity:0}}
+    [data-doty-satellite][data-popping]{pointer-events:none;animation:doty-satellite-fade 200ms ease-out forwards}
+    [data-doty-satellite][data-popping] [data-satellite-dot]{animation:doty-satellite-pop 200ms ease-out forwards}
+    [data-doty-satellite][data-popping] [data-satellite-badge]{animation:doty-satellite-fade 200ms ease-out forwards}`;
   element.append(style);
   const satellites = new Map<string, Satellite>();
   const motionQuery = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
@@ -77,6 +84,25 @@ export function mountSatellites(
   let raf = 0;
   let lastTime: number | undefined;
   let elapsed = 0;
+  const POP_MS = 200;
+  const popTimers = new Set<number>();
+
+  /** Remove a satellite, scaling it out first unless motion is reduced. */
+  function popOut(satellite: Satellite): void {
+    if (satellite.removing) return;
+    satellite.removing = true;
+    const button = satellite.button;
+    if (reduced || typeof window === 'undefined' || typeof window.setTimeout !== 'function') {
+      button.remove();
+      return;
+    }
+    button.setAttribute('data-popping', 'true');
+    const timer = window.setTimeout(() => {
+      popTimers.delete(timer);
+      button.remove();
+    }, POP_MS);
+    popTimers.add(timer);
+  }
 
   function paint(dt: number): void {
     const count = satellites.size;
@@ -141,6 +167,7 @@ export function mountSatellites(
         dot.setAttribute('aria-hidden', 'true');
         dot.style.cssText = `display:grid;place-items:center;width:${dotSize}px;height:${dotSize}px;border:2px solid;border-radius:50%;font:bold ${badgeFont}px/1 system-ui;`;
         const badge = document.createElement('span');
+        badge.setAttribute('data-satellite-badge', '');
         badge.setAttribute('aria-hidden', 'true');
         badge.style.cssText = `position:absolute;right:-1px;bottom:-1px;font:bold ${badgeFont}px/1 system-ui;background:#141320;border-radius:4px;padding:1px;`;
         button.append(dot, badge);
@@ -172,7 +199,7 @@ export function mountSatellites(
       satellite.badge.textContent = ACTIVITY[status.status].mark;
     }
     for (const [key, satellite] of satellites) {
-      if (!keys.has(key)) { satellite.button.remove(); satellites.delete(key); }
+      if (!keys.has(key)) { satellites.delete(key); popOut(satellite); }
     }
     animate();
   }
@@ -191,6 +218,10 @@ export function mountSatellites(
       destroyed = true;
       unsubscribe();
       if (raf) cancelAnimationFrame(raf);
+      if (typeof window !== 'undefined' && typeof window.clearTimeout === 'function') {
+        for (const timer of popTimers) window.clearTimeout(timer);
+      }
+      popTimers.clear();
       motionQuery?.removeEventListener('change', onMotionChange);
       satellites.clear();
       element.remove();

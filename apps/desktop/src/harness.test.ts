@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createHarnessStore, readHarnessStatus } from './harness.js';
+import { createHarnessStore, latestLineTs, newAssistantLines, newResponseLines, readHarnessStatus } from './harness.js';
 
 const sample = { harness: 'codex', sessionId: 'same-id', status: 'thinking', lastActivityAt: 1_000, project: 'C:/repo' };
 describe('local harness read model', () => {
@@ -37,5 +37,41 @@ describe('local harness read model', () => {
     stop();
     store.refresh();
     expect(notifications).toBe(2);
+  });
+});
+
+describe('new assistant responses', () => {
+  const line = (kind: string, ts: number, text?: string) => ({ ts, kind, ...(text !== undefined ? { text } : {}) });
+
+  it('selects only new, non-empty assistant lines, oldest first', () => {
+    const lines = [
+      line('assistant', 100, 'first'),
+      line('user', 200, 'a question'),
+      line('assistant', 300, '   '),
+      line('assistant', 400, 'second'),
+      line('assistant', 500, 'third'),
+    ];
+    expect(newAssistantLines(lines, 100).map((l) => l.text)).toEqual(['second', 'third']);
+    expect(newAssistantLines(lines, 400).map((l) => l.text)).toEqual(['third']);
+    expect(newAssistantLines(lines, 999)).toEqual([]);
+  });
+
+  it('tracks the newest activity timestamp for the watermark', () => {
+    expect(latestLineTs([line('assistant', 10), line('tool_call', 42)], 0)).toBe(42);
+    expect(latestLineTs([], 7)).toBe(7);
+  });
+
+  it('also selects reasoning lines, in order and skipping tool noise', () => {
+    const lines = [
+      line('assistant', 100, 'reply'),
+      line('thinking', 200, 'pondering'),
+      line('tool_call', 250),
+      line('thinking', 300, 'still pondering'),
+      line('thinking', 400, '   '),
+    ];
+    expect(newResponseLines(lines, 100).map((l) => `${l.kind}:${l.text}`)).toEqual([
+      'thinking:pondering',
+      'thinking:still pondering',
+    ]);
   });
 });

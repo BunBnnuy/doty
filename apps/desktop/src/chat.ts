@@ -9,11 +9,28 @@
 import type { Connection } from '@doty/dot-state';
 import { isRetryableSend, normalizeServerUrl } from './api.js';
 import { renderMarkdown } from './markdown.js';
+import { createQuestionRow, type PendingQuestion } from './questions.js';
 import type { SseFrame } from './sse.js';
 import { toChatLine, type ChatLine } from './wire.js';
 
 export interface ChatPanel {
-  ingest(frame: SseFrame): void;
+  /**
+   * Render one SSE frame. `live` is false for replayed history, so mirrors
+   * (the character's speech bubble) never fire for past messages.
+   */
+  ingest(frame: SseFrame, live?: boolean): void;
+  /**
+   * Append a locally observed harness agent response (reply or reasoning block)
+   * as a Doty row. `key` deduplicates re-reports; `note` labels the source.
+   */
+  addHarnessResponse(input: {
+    key: string;
+    text: string;
+    note: string;
+    kind?: 'assistant' | 'thinking';
+  }): void;
+  /** Show (or clear) the pending T3 questions pinned at the end of the chat. */
+  setPendingQuestions(questions: PendingQuestion[]): void;
   setConnection(status: Connection): void;
   /** Drop the transcript (server URL changed; the replay will refill it). */
   clear(): void;
@@ -28,6 +45,18 @@ export interface MountChatOptions {
   lastSeq: () => number;
   send: (text: string) => Promise<number | undefined>;
   onServerUrl: (url: string) => void;
+  /** Called once per newly rendered row (never for replayed history). */
+  onMessage?: (message: ChatMessage) => void;
+}
+
+/** A chat row that was just rendered; used to mirror it elsewhere (a bubble). */
+export interface ChatMessage {
+  role: ChatLine['role'];
+  text: string;
+  note?: string;
+  tone?: 'error';
+  /** Marks an agent reasoning block, styled apart from a real reply. */
+  variant?: 'reasoning';
 }
 
 interface Item {
@@ -40,6 +69,7 @@ interface Item {
   afterSeq: number;
   tone?: 'error';
   note?: string;
+  variant?: 'reasoning';
 }
 
 const EMPTY_COPY: Record<Connection, string> = {
@@ -60,6 +90,9 @@ export function mountChat(options: MountChatOptions): ChatPanel {
   const items: Item[] = [];
   const byId = new Map<string, { item: Item; element: HTMLLIElement }>();
   const seenSeq = new Set<number>();
+  const harnessKeys = new Set<string>();
+  let pendingQuestions: PendingQuestion[] = [];
+  let questionRows: HTMLLIElement[] = [];
   const queue: string[] = [];
   let localSeq = 0;
   let flushing = false;
@@ -109,7 +142,7 @@ export function mountChat(options: MountChatOptions): ChatPanel {
   });
 
   function renderEmpty(): void {
-    const show = items.length === 0;
+    const show = items.length === 0 && pendingQuestions.length === 0;
     empty.hidden = !show;
     empty.textContent = EMPTY_COPY[connection];
   }
@@ -136,6 +169,45 @@ export function mountChat(options: MountChatOptions): ChatPanel {
     });
   }
 
+  /**
+   * A watched harness thread produced an agent response. It is rendered like a
+   * Doty reply, but stays local: this is never POSTed and never leaves the
+   * device. Deduplicated by `key` so a replayed activity snapshot is a no-op.
+   */
+  function addHarnessResponse(input: {
+    key: string;
+    text: string;
+    note: string;
+    kind?: 'assistant' | 'thinking';
+  }): void {
+    const text = input.text.trim();
+    if (!text || harnessKeys.has(input.key)) return;
+    harnessKeys.add(input.key);
+    const reasoning = input.kind === 'thinking';
+    pushItem({
+      id: `harness-${input.key}`,
+      role: 'assistant',
+      text,
+      status: 'sent',
+      afterSeq: options.lastSeq(),
+      note: reasoning ? `${input.note} · razonamiento` : input.note,
+      ...(reasoning ? { variant: 'reasoning' as const } : {}),
+    });
+  }
+
+  /** Rebuild the pending-question rows, pinned after the newest message. */
+  function renderQuestions(): void {
+    for (const row of questionRows) row.remove();
+    questionRows = pendingQuestions.map(createQuestionRow);
+    for (const row of questionRows) list.append(row);
+    renderEmpty();
+  }
+
+  function setPendingQuestions(questions: PendingQuestion[]): void {
+    pendingQuestions = questions;
+    renderQuestions();
+  }
+
   async function sendOutgoing(text: string): Promise<void> {
     const item = pushItem({
       id: `local-${++localSeq}`,
@@ -156,22 +228,33 @@ export function mountChat(options: MountChatOptions): ChatPanel {
     }
   }
 
-  function pushItem(item: Item): Item {
+  function pushItem(item: Item, live = true): Item {
     items.push(item);
     const element = renderItem(item);
     byId.set(item.id, { item, element });
     const stick = list.scrollHeight - list.scrollTop - list.clientHeight < 48;
     list.append(element);
+    // Keep the pending-question cards at the bottom of the chat.
+    for (const row of questionRows) list.append(row);
     if (stick || item.role === 'user') {
       list.scrollTop = list.scrollHeight;
     }
     renderEmpty();
+    if (live) {
+      options.onMessage?.({
+        role: item.role,
+        text: item.text,
+        ...(item.note !== undefined ? { note: item.note } : {}),
+        ...(item.tone !== undefined ? { tone: item.tone } : {}),
+        ...(item.variant !== undefined ? { variant: item.variant } : {}),
+      });
+    }
     return item;
   }
 
   function renderItem(item: Item): HTMLLIElement {
     const element = document.createElement('li');
-    element.className = `msg msg-${item.role}${item.tone === 'error' ? ' is-error' : ''}`;
+    element.className = `msg msg-${item.role}${item.tone === 'error' ? ' is-error' : ''}${item.variant === 'reasoning' ? ' is-reasoning' : ''}`;
     element.dataset.status = item.status;
     if (item.seq !== undefined) element.dataset.seq = String(item.seq);
 
@@ -255,7 +338,7 @@ export function mountChat(options: MountChatOptions): ChatPanel {
     if (index !== -1) queue.splice(index, 1);
   }
 
-  function ingest(frame: SseFrame): void {
+  function ingest(frame: SseFrame, live = true): void {
     const line = toChatLine(frame);
     if (!line) return;
     if (line.seq !== undefined && seenSeq.has(line.seq)) return;
@@ -295,7 +378,7 @@ export function mountChat(options: MountChatOptions): ChatPanel {
       status: 'sent',
       afterSeq: line.seq ?? options.lastSeq(),
       tone: line.tone,
-    });
+    }, live);
   }
 
   async function flush(): Promise<void> {
@@ -334,9 +417,11 @@ export function mountChat(options: MountChatOptions): ChatPanel {
     items.length = 0;
     byId.clear();
     seenSeq.clear();
+    harnessKeys.clear();
     queue.length = 0;
     list.replaceChildren();
-    renderEmpty();
+    questionRows = [];
+    renderQuestions();
   }
 
   /** Drop rendered history but keep outgoing rows the server has not accepted. */
@@ -352,10 +437,11 @@ export function mountChat(options: MountChatOptions): ChatPanel {
       byId.set(item.id, { item, element });
       list.append(element);
     }
-    renderEmpty();
+    questionRows = [];
+    renderQuestions();
   }
 
-  return { ingest, setConnection, clear, flush, forgetHistory, showAuthError };
+  return { ingest, addHarnessResponse, setPendingQuestions, setConnection, clear, flush, forgetHistory, showAuthError };
 }
 
 function statusLabel(status: Item['status']): string {

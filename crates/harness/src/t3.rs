@@ -8,12 +8,13 @@ use crate::model::{
     Harness, HarnessActivity, HarnessEvent, HarnessEventKind, TokenUsage, ToolInfo,
 };
 use crate::opencode::OpenCodeAdapter;
-use crate::sqlite::{has_columns, has_tables, open_read_only};
+use crate::sqlite::{has_columns, has_tables, open_read_only, open_read_write};
 use crate::time::{now_millis, parse_rfc3339_millis};
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use rusqlite::{Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime};
 
@@ -472,7 +473,7 @@ impl T3Adapter {
         }
 
         // Messages are a fallback when this thread has not yet projected turn
-        // items. Do not replay message text: only the role/time metadata is used.
+        // items. Only the final (non-streaming) assistant message carries text.
         if !has_turn_items {
             let mut msg_stmt = conn.prepare("SELECT message_id, role, streaming, created_at, updated_at, payload_json FROM orchestration_v2_projection_messages WHERE thread_id=?1 ORDER BY created_at, message_id")?;
             let messages = msg_stmt.query_map([&session.session_id], |r| {
@@ -505,7 +506,7 @@ impl T3Adapter {
                         None,
                     ));
                 } else if role == "assistant" {
-                    on_event(make_event(
+                    let mut event = make_event(
                         session,
                         None,
                         ts,
@@ -517,7 +518,11 @@ impl T3Adapter {
                         }),
                         None,
                         None,
-                    ));
+                    );
+                    if !streaming {
+                        event.text = payload_text(&payload);
+                    }
+                    on_event(event);
                 }
                 if let Some(tokens) = token_usage(&payload) {
                     on_event(make_event(
@@ -661,6 +666,17 @@ impl T3Adapter {
             );
             if kind == HarnessEventKind::TokenUsage {
                 event.tokens = token_usage(payload);
+            }
+            // LOCAL ONLY: rendered in the desktop UI. Only a completed assistant
+            // message or reasoning block is final, so streaming partials stay
+            // text-free.
+            if status == "completed"
+                && matches!(
+                    kind,
+                    HarnessEventKind::Assistant | HarnessEventKind::Thinking
+                )
+            {
+                event.text = payload_text(payload);
             }
             on_event(event);
             if tool.is_some() && matches!(status, "completed" | "failed" | "interrupted") {
@@ -825,6 +841,18 @@ fn matches_upstream_thread(provider_thread_id: &str, upstream_ids: &HashSet<Stri
     })
 }
 
+/// LOCAL ONLY. The rendered `text` of an assistant message or reasoning block.
+/// It is surfaced through the desktop's local watcher bridge and never leaves
+/// the device.
+fn payload_text(payload: &Value) -> Option<String> {
+    payload
+        .get("text")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_owned)
+}
+
 fn token_usage(value: &Value) -> Option<TokenUsage> {
     let candidate = value.get("tokens").unwrap_or(value);
     let input = candidate
@@ -838,4 +866,457 @@ fn token_usage(value: &Value) -> Option<TokenUsage> {
         .or_else(|| candidate.get("output_tokens"))
         .and_then(Value::as_u64);
     (input.is_some() || output.is_some()).then_some(TokenUsage { input, output })
+}
+
+// ---------------------------------------------------------------------------
+// Pending user-input questions (read-only, local-only)
+// ---------------------------------------------------------------------------
+
+/// A question a watched T3 thread is waiting for the user to answer.
+///
+/// LOCAL ONLY: contains the prompt text. It is surfaced to the desktop UI over
+/// local IPC and must never be transmitted off-device.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingQuestion {
+    pub harness: Harness,
+    pub session_id: String,
+    pub request_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_title: Option<String>,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<i64>,
+    pub questions: Vec<QuestionPrompt>,
+}
+
+/// One prompt within a pending user-input request.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuestionPrompt {
+    pub id: String,
+    #[serde(default)]
+    pub header: String,
+    pub question: String,
+    #[serde(default)]
+    pub options: Vec<QuestionOption>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub multi_select: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_custom_answer: Option<bool>,
+}
+
+/// One selectable answer within a prompt.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuestionOption {
+    pub label: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+}
+
+/// Runtime-request statuses that mean the question is no longer pending.
+const RESOLVED_STATUSES: [&str; 5] = ["resolved", "completed", "cancelled", "failed", "expired"];
+
+/// Pending `user_input` requests across all T3 threads.
+///
+/// Read-only and fail-closed: a missing table/column or an unknown schema yields
+/// an empty list rather than a speculative query. LOCAL ONLY.
+pub fn pending_user_input(db_path: &Path) -> Vec<PendingQuestion> {
+    let Ok(conn) = open_read_only(db_path) else {
+        return Vec::new();
+    };
+    pending_user_input_conn(&conn).unwrap_or_default()
+}
+
+fn pending_user_input_conn(conn: &Connection) -> Result<Vec<PendingQuestion>> {
+    if !has_tables(conn, &TABLES)?
+        || !has_columns(
+            conn,
+            "orchestration_v2_projection_runtime_requests",
+            &["runtime_request_id", "kind", "status"],
+        )?
+    {
+        return Ok(Vec::new());
+    }
+
+    let mut pending: HashSet<String> = HashSet::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT runtime_request_id, status FROM orchestration_v2_projection_runtime_requests
+             WHERE kind='user_input'",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        for row in rows {
+            let (id, status) = row?;
+            if !RESOLVED_STATUSES.contains(&status.as_str()) {
+                pending.insert(id);
+            }
+        }
+    }
+    if pending.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut out = Vec::new();
+    let mut stmt = conn.prepare(
+        "SELECT ti.thread_id, th.title, ti.payload_json
+         FROM orchestration_v2_projection_turn_items ti
+         LEFT JOIN orchestration_v2_projection_threads th ON th.thread_id = ti.thread_id
+         WHERE ti.type='user_input_request'
+         ORDER BY ti.updated_at DESC LIMIT 200",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, Option<String>>(1)?,
+            r.get::<_, String>(2)?,
+        ))
+    })?;
+    for row in rows {
+        let (thread_id, thread_title, raw) = row?;
+        let Ok(payload) = serde_json::from_str::<Value>(&raw) else {
+            continue;
+        };
+        let Some(request_id) = payload.get("requestId").and_then(Value::as_str) else {
+            continue;
+        };
+        if !pending.contains(request_id) {
+            continue;
+        }
+        let questions = parse_questions(&payload);
+        if questions.is_empty() {
+            continue;
+        }
+        out.push(PendingQuestion {
+            harness: Harness::T3,
+            session_id: thread_id,
+            request_id: request_id.to_string(),
+            thread_title,
+            title: payload
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or("User input")
+                .to_string(),
+            created_at: payload
+                .get("startedAt")
+                .and_then(Value::as_str)
+                .and_then(parse_rfc3339_millis),
+            questions,
+        });
+    }
+    Ok(out)
+}
+
+fn parse_questions(payload: &Value) -> Vec<QuestionPrompt> {
+    let Some(items) = payload.get("questions").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let mut prompts = Vec::new();
+    for item in items {
+        let Some(question) = item.get("question").and_then(Value::as_str) else {
+            continue;
+        };
+        let options = item
+            .get("options")
+            .and_then(Value::as_array)
+            .map(|options| {
+                options
+                    .iter()
+                    .filter_map(|option| {
+                        let label = option.get("label").and_then(Value::as_str)?;
+                        Some(QuestionOption {
+                            label: label.to_string(),
+                            description: option
+                                .get("description")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_string(),
+                            value: option
+                                .get("value")
+                                .and_then(Value::as_str)
+                                .map(str::to_owned),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        prompts.push(QuestionPrompt {
+            id: item
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or("q0")
+                .to_string(),
+            header: item
+                .get("header")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            question: question.to_string(),
+            options,
+            multi_select: item.get("multiSelect").and_then(Value::as_bool),
+            allow_custom_answer: item.get("allowCustomAnswer").and_then(Value::as_bool),
+        });
+    }
+    prompts
+}
+
+// ---------------------------------------------------------------------------
+// Responding to a pending question (best-effort local write)
+// ---------------------------------------------------------------------------
+
+/// Answer a pending T3 `user_input` request by enqueuing the same
+/// `runtime-request.respond` effect T3 writes when the user answers in its UI.
+///
+/// UNSUPPORTED / BEST EFFORT: this writes to T3's private projection database
+/// (`orchestration_v2_effect_outbox`), which T3's effect worker polls. The
+/// request is validated as still pending first, and the provider session comes
+/// from the stored request — never from the caller. LOCAL ONLY.
+pub fn respond_to_user_input(
+    db_path: &Path,
+    thread_id: &str,
+    request_id: &str,
+    answers: &BTreeMap<String, String>,
+) -> Result<()> {
+    let conn = open_read_write(db_path)?;
+    respond_to_user_input_conn(&conn, thread_id, request_id, answers)
+}
+
+fn respond_to_user_input_conn(
+    conn: &Connection,
+    thread_id: &str,
+    request_id: &str,
+    answers: &BTreeMap<String, String>,
+) -> Result<()> {
+    if !has_tables(
+        conn,
+        &[
+            "orchestration_v2_projection_runtime_requests",
+            "orchestration_v2_effect_outbox",
+        ],
+    )? {
+        return Err(anyhow!("unexpected T3 schema"));
+    }
+    let row: Option<(String, String, String, String)> = conn
+        .query_row(
+            "SELECT thread_id, kind, status, payload_json
+             FROM orchestration_v2_projection_runtime_requests WHERE runtime_request_id=?1",
+            [request_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .optional()?;
+    let Some((db_thread, kind, status, payload)) = row else {
+        return Err(anyhow!("runtime request not found"));
+    };
+    if db_thread != thread_id {
+        return Err(anyhow!("thread does not match the request"));
+    }
+    if kind != "user_input" || RESOLVED_STATUSES.contains(&status.as_str()) {
+        return Err(anyhow!("request is no longer pending"));
+    }
+    let payload: Value = serde_json::from_str(&payload).unwrap_or(Value::Null);
+    let provider_session = payload
+        .get("responseCapability")
+        .and_then(|capability| capability.get("providerSessionId"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("request has no live provider session"))?;
+
+    let command_id = unique_id();
+    let effect_id = format!("effect:{command_id}:runtime-request.respond:{request_id}");
+    let body = serde_json::json!({
+        "type": "runtime-request.respond",
+        "providerSessionId": provider_session,
+        "requestId": request_id,
+        "answers": answers,
+    });
+    conn.execute(
+        "INSERT INTO orchestration_v2_effect_outbox
+         (effect_id, command_id, thread_id, effect_type, payload_json, status, attempt_count,
+          available_at, lease_owner, lease_expires_at, created_at, updated_at, completed_at, last_error)
+         VALUES (?1, ?2, ?3, 'runtime-request.respond', ?4, 'pending', 0,
+                 strftime('%Y-%m-%dT%H:%M:%fZ','now'), NULL, NULL,
+                 strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'), NULL, NULL)",
+        rusqlite::params![effect_id, command_id, thread_id, body.to_string()],
+    )?;
+    Ok(())
+}
+
+/// A process-unique id; T3 only requires uniqueness here, not a real UUID.
+fn unique_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos() as u64)
+        .unwrap_or(0);
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{nanos:016x}-{seq:04x}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::params;
+
+    fn fixture() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE orchestration_v2_projection_threads (thread_id TEXT, title TEXT);
+             CREATE TABLE orchestration_v2_projection_runs (id TEXT);
+             CREATE TABLE orchestration_v2_projection_run_attempts (id TEXT);
+             CREATE TABLE orchestration_v2_projection_nodes (id TEXT);
+             CREATE TABLE orchestration_v2_projection_turn_items
+               (thread_id TEXT, type TEXT, updated_at TEXT, payload_json TEXT);
+             CREATE TABLE orchestration_v2_projection_messages (id TEXT);
+             CREATE TABLE orchestration_v2_projection_runtime_requests
+               (runtime_request_id TEXT, thread_id TEXT, kind TEXT, status TEXT, payload_json TEXT);
+             CREATE TABLE orchestration_v2_effect_outbox
+               (effect_id TEXT PRIMARY KEY, command_id TEXT, thread_id TEXT, effect_type TEXT,
+                payload_json TEXT, status TEXT, attempt_count INTEGER, available_at TEXT,
+                lease_owner TEXT, lease_expires_at TEXT, created_at TEXT, updated_at TEXT,
+                completed_at TEXT, last_error TEXT);",
+        )
+        .unwrap();
+        conn
+    }
+
+    fn item(request_id: &str, question: &str) -> String {
+        format!(
+            r#"{{"requestId":"{request_id}","title":"User input",
+                "startedAt":"2026-10-05T19:52:38.072Z",
+                "questions":[{{"id":"q0","header":"H","question":"{question}",
+                "options":[{{"label":"A","description":"d","value":"a"}}]}}]}}"#
+        )
+    }
+
+    #[test]
+    fn unknown_schema_yields_nothing() {
+        let conn = Connection::open_in_memory().unwrap();
+        assert!(pending_user_input_conn(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn returns_only_pending_questions_with_options() {
+        let conn = fixture();
+        conn.execute(
+            "INSERT INTO orchestration_v2_projection_threads VALUES ('th1','Doty')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO orchestration_v2_projection_runtime_requests VALUES ('req-pending','th1','user_input','pending','{}')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO orchestration_v2_projection_runtime_requests VALUES ('req-done','th1','user_input','resolved','{}')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO orchestration_v2_projection_turn_items VALUES ('th1','user_input_request','2026-10-05T19:52:38.072Z',?1)",
+            params![item("req-pending", "Seguimos?")],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO orchestration_v2_projection_turn_items VALUES ('th1','user_input_request','2026-10-05T19:26:53.303Z',?1)",
+            params![item("req-done", "Ya resuelta")],
+        )
+        .unwrap();
+
+        let pending = pending_user_input_conn(&conn).unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].request_id, "req-pending");
+        assert_eq!(pending[0].thread_title.as_deref(), Some("Doty"));
+        assert_eq!(pending[0].questions.len(), 1);
+        assert_eq!(pending[0].questions[0].question, "Seguimos?");
+        assert_eq!(pending[0].questions[0].options[0].value.as_deref(), Some("a"));
+        // Wire shape keeps camelCase and stays local-only.
+        let json = serde_json::to_string(&pending[0]).unwrap();
+        assert!(json.contains("\"requestId\":\"req-pending\""));
+        assert!(json.contains("\"threadTitle\":\"Doty\""));
+    }
+
+    #[test]
+    fn responding_enqueues_the_effect_and_validates_state() {
+        let conn = fixture();
+        let capability = r#"{"responseCapability":{"type":"live","providerSessionId":"provider-session:opencode:shared"}}"#;
+        conn.execute(
+            "INSERT INTO orchestration_v2_projection_runtime_requests VALUES ('req-1','th1','user_input','pending',?1)",
+            params![capability],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO orchestration_v2_projection_runtime_requests VALUES ('req-done','th1','user_input','resolved',?1)",
+            params![capability],
+        )
+        .unwrap();
+
+        let mut answers = BTreeMap::new();
+        answers.insert("q0".to_string(), "Sí".to_string());
+        respond_to_user_input_conn(&conn, "th1", "req-1", &answers).unwrap();
+
+        let row: (String, String, String, String) = conn
+            .query_row(
+                "SELECT thread_id, effect_type, status, payload_json FROM orchestration_v2_effect_outbox",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, "th1");
+        assert_eq!(row.1, "runtime-request.respond");
+        assert_eq!(row.2, "pending");
+        assert!(row.3.contains("\"providerSessionId\":\"provider-session:opencode:shared\""));
+        assert!(row.3.contains("\"requestId\":\"req-1\""));
+        assert!(row.3.contains("\"q0\":\"Sí\""));
+
+        // Resolved requests, unknown ids, and thread mismatches are rejected.
+        assert!(respond_to_user_input_conn(&conn, "th1", "req-done", &answers).is_err());
+        assert!(respond_to_user_input_conn(&conn, "th1", "missing", &answers).is_err());
+        assert!(respond_to_user_input_conn(&conn, "other", "req-1", &answers).is_err());
+    }
+
+    #[test]
+    fn reasoning_items_carry_text_only_once_completed() {
+        let adapter = T3Adapter::with_db(":memory:");
+        let session = SessionRef {
+            harness: Harness::T3,
+            session_id: "th1".into(),
+            path: PathBuf::from(":memory:"),
+            project: None,
+            modified: None,
+            bytes: 0,
+        };
+        let payload = serde_json::json!({ "text": "  check the logs  ", "streaming": false });
+
+        let mut events = Vec::new();
+        adapter.map_turn_item(
+            &session,
+            None,
+            100,
+            "reasoning",
+            "completed",
+            &payload,
+            &mut |event| events.push(event),
+        );
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, HarnessEventKind::Thinking);
+        assert_eq!(events[0].text.as_deref(), Some("check the logs"));
+
+        // Streaming partials stay text-free, exactly like assistant messages.
+        let mut partial = Vec::new();
+        adapter.map_turn_item(
+            &session,
+            None,
+            100,
+            "reasoning",
+            "streaming",
+            &payload,
+            &mut |event| partial.push(event),
+        );
+        assert!(partial[0].text.is_none());
+    }
 }

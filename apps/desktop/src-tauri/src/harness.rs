@@ -6,8 +6,8 @@
 //! server sink exists in this crate.
 use doty_harness::{
     time::now_millis, Adapter, CodexAdapter, Harness, HarnessActivity, HarnessEvent,
-    HarnessEventKind, HarnessStatus, OpenCodeAdapter, SessionRef, StreamOptions, T3Adapter,
-    ToolInfo, TokenTotals,
+    HarnessEventKind, HarnessStatus, OpenCodeAdapter, PendingQuestion, SessionRef, StreamOptions,
+    T3Adapter, ToolInfo, TokenTotals,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -22,10 +22,13 @@ use tauri::{AppHandle, Emitter, State};
 const POLL: Duration = Duration::from_secs(2);
 const STALE_MS: i64 = 120_000;
 const MAX_LINES: usize = 80;
-const MAX_TEXT: usize = 600;
+// LOCAL ONLY: caps one activity line's text. Large enough that a chat reply is
+// readable, bounded so a replayed batch stays small on the local IPC channel.
+const MAX_TEXT: usize = 2_000;
 
 type Statuses = Arc<Mutex<BTreeMap<(Harness, String), HarnessStatus>>>;
 type Activity = Arc<Mutex<BTreeMap<(Harness, String), Vec<ActivityLine>>>>;
+type Questions = Arc<Mutex<Vec<PendingQuestion>>>;
 
 /// One recent activity line shown when a session is selected.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -82,6 +85,7 @@ struct Worker {
 pub struct HarnessWatchers {
     statuses: Statuses,
     activity: Activity,
+    questions: Questions,
     workers: Mutex<Vec<Worker>>,
 }
 
@@ -89,7 +93,8 @@ impl HarnessWatchers {
     pub fn start(app: AppHandle) -> Self {
         let statuses = Arc::new(Mutex::new(BTreeMap::new()));
         let activity = Arc::new(Mutex::new(BTreeMap::new()));
-        let workers = [Harness::Codex, Harness::Opencode, Harness::T3]
+        let questions: Questions = Arc::new(Mutex::new(Vec::new()));
+        let mut workers: Vec<Worker> = [Harness::Codex, Harness::Opencode, Harness::T3]
             .into_iter()
             .map(|harness| {
                 let (stop, receiver) = mpsc::channel();
@@ -164,9 +169,42 @@ impl HarnessWatchers {
                 Worker { stop, join }
             })
             .collect();
+
+        // Pending-question poller for T3. Its own thread keeps the projection
+        // read independent from the streaming adapters.
+        {
+            let (stop, receiver) = mpsc::channel();
+            let questions = questions.clone();
+            let app = app.clone();
+            let join = thread::spawn(move || {
+                let db_path = T3Adapter::new().db_path().to_path_buf();
+                loop {
+                    let next = doty_harness::pending_user_input(&db_path);
+                    let changed = {
+                        let mut current = questions.lock().unwrap();
+                        if *current == next {
+                            false
+                        } else {
+                            *current = next.clone();
+                            true
+                        }
+                    };
+                    if changed {
+                        let _ = app.emit("harness://questions", &next);
+                    }
+                    match receiver.recv_timeout(POLL) {
+                        Err(mpsc::RecvTimeoutError::Timeout) => {}
+                        _ => break,
+                    }
+                }
+            });
+            workers.push(Worker { stop, join });
+        }
+
         Self {
             statuses,
             activity,
+            questions,
             workers: Mutex::new(workers),
         }
     }
@@ -212,6 +250,28 @@ pub fn harness_activity(watchers: State<'_, HarnessWatchers>) -> Vec<ActivityBat
             events: lines.clone(),
         })
         .collect()
+}
+
+/// Pending T3 user-input questions for webview startup/reload hydration.
+#[tauri::command]
+pub fn harness_questions(watchers: State<'_, HarnessWatchers>) -> Vec<PendingQuestion> {
+    watchers.questions.lock().unwrap().clone()
+}
+
+/// Answer a pending T3 question by enqueuing T3's `runtime-request.respond`
+/// effect. Best effort: T3 validates and processes it. LOCAL ONLY.
+#[tauri::command]
+pub fn answer_question(
+    thread_id: String,
+    request_id: String,
+    question_id: String,
+    value: String,
+) -> Result<(), String> {
+    let mut answers = std::collections::BTreeMap::new();
+    answers.insert(question_id, value);
+    let db_path = T3Adapter::new().db_path().to_path_buf();
+    doty_harness::respond_to_user_input(&db_path, &thread_id, &request_id, &answers)
+        .map_err(|error| error.to_string())
 }
 
 // Include the WAL: SQLite writes need not touch the main DB's mtime or size.

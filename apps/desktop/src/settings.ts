@@ -13,11 +13,16 @@ export interface DotySettings {
   orbitalSize: number;
   /** Diameter of the character, in CSS pixels. */
   dotySize: number;
+  /** Show a speech bubble when a watched task finishes. */
+  showTaskFinishedBubble: boolean;
+  /** Close the chat after this many seconds without interaction (0 = never). */
+  autoCloseSeconds: number;
 }
 
 export const ORBIT_RANGE = { min: 110, max: 320 } as const;
 export const ORBITAL_RANGE = { min: 8, max: 44 } as const;
 export const DOTY_RANGE = { min: 48, max: 160 } as const;
+export const AUTO_CLOSE_RANGE = { min: 0, max: 600 } as const;
 
 const KEY = 'doty.settings';
 
@@ -26,6 +31,8 @@ export const DEFAULT_SETTINGS: DotySettings = {
   orbitSize: 150,
   orbitalSize: 17,
   dotySize: 76,
+  showTaskFinishedBubble: true,
+  autoCloseSeconds: 30,
 };
 
 function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
@@ -43,6 +50,15 @@ export function normalizeSettings(input: Partial<DotySettings>): DotySettings {
     orbitSize: clampNumber(input.orbitSize, ORBIT_RANGE.min, ORBIT_RANGE.max, DEFAULT_SETTINGS.orbitSize),
     orbitalSize: clampNumber(input.orbitalSize, ORBITAL_RANGE.min, ORBITAL_RANGE.max, DEFAULT_SETTINGS.orbitalSize),
     dotySize: clampNumber(input.dotySize, DOTY_RANGE.min, DOTY_RANGE.max, DEFAULT_SETTINGS.dotySize),
+    showTaskFinishedBubble: typeof input.showTaskFinishedBubble === 'boolean'
+      ? input.showTaskFinishedBubble
+      : DEFAULT_SETTINGS.showTaskFinishedBubble,
+    autoCloseSeconds: clampNumber(
+      input.autoCloseSeconds,
+      AUTO_CLOSE_RANGE.min,
+      AUTO_CLOSE_RANGE.max,
+      DEFAULT_SETTINGS.autoCloseSeconds,
+    ),
   };
 }
 

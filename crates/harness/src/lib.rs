@@ -29,7 +29,10 @@ pub use model::{
     SessionDigest, TokenTotals, TokenUsage, ToolInfo, TRANSMITTED_DIGEST_FIELDS,
 };
 pub use opencode::OpenCodeAdapter;
-pub use t3::T3Adapter;
+pub use t3::{
+    pending_user_input, respond_to_user_input, PendingQuestion, QuestionOption, QuestionPrompt,
+    T3Adapter,
+};
 
 /// Bump whenever the mirrored event shape changes.
 pub const CONTRACT_VERSION: &str = "0";
