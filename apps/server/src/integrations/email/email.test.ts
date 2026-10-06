@@ -6,9 +6,22 @@ import { GraphClient } from './microsoft.js';
 import { EmailService } from './service.js';
 import { InMemoryIntegrationStore } from './store.js';
 import { htmlToText } from './text.js';
+import type { EmailProvider } from './types.js';
 
 const KEY_A = Buffer.alloc(32, 1).toString('base64');
 const KEY_B = Buffer.alloc(32, 2).toString('base64');
+
+const MICROSOFT_CONFIG = {
+  clientId: 'client',
+  clientSecret: 'secret',
+  tenantId: 'tenant-1',
+  redirectUri: 'https://doty.killbunny.top/integrations/microsoft/callback',
+};
+const GOOGLE_CONFIG = {
+  clientId: 'g-client',
+  clientSecret: 'g-secret',
+  redirectUri: 'https://doty.killbunny.top/integrations/google/callback',
+};
 
 const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), {
@@ -141,11 +154,12 @@ describe('GraphClient', () => {
   });
 });
 
-describe('EmailService (microsoft)', () => {
+describe('EmailService (multiple accounts)', () => {
   const base = 1_800_000_000_000;
 
   function build() {
     let now = base;
+    let googleConnects = 0;
     const box = new SecretBox(KEY_A);
     const store = new InMemoryIntegrationStore();
     const fakeFetch = vi.fn<typeof fetch>(async (input, init) => {
@@ -153,50 +167,84 @@ describe('EmailService (microsoft)', () => {
       if (url.includes('login.microsoftonline.com')) {
         const refresh = String(init?.body ?? '').includes('grant_type=refresh_token');
         return json({
-          access_token: refresh ? 'access-refreshed' : 'access-1',
-          refresh_token: refresh ? 'refresh-2' : 'refresh-1',
+          access_token: refresh ? 'ms-access-2' : 'ms-access-1',
+          refresh_token: refresh ? 'ms-refresh-2' : 'ms-refresh-1',
           expires_in: 3600,
           scope: 'Mail.Read User.Read',
         });
       }
-      if (url.includes('/me/messages')) return json({ value: [] });
+      if (url.includes('oauth2.googleapis.com/token')) {
+        const refresh = String(init?.body ?? '').includes('grant_type=refresh_token');
+        return json({
+          access_token: refresh ? 'g-access-2' : 'g-access-1',
+          refresh_token: refresh ? 'g-refresh-2' : 'g-refresh-1',
+          expires_in: 3600,
+          scope: 'gmail.readonly',
+        });
+      }
+      if (url.includes('openidconnect.googleapis.com')) {
+        googleConnects += 1;
+        return json({ email: googleConnects === 1 ? 'segundo@gmail.com' : 'tercero@gmail.com' });
+      }
       if (url.includes('graph.microsoft.com/v1.0/me?')) return json({ mail: 'jesus@corpogafi.com' });
-      throw new Error(`unexpected fetch ${url}`);
+      return json({ value: [], messages: [] });
     });
     const service = new EmailService({
       store,
       box,
-      microsoft: {
-        clientId: 'client',
-        clientSecret: 'secret',
-        tenantId: 'tenant-1',
-        redirectUri: 'https://doty.killbunny.top/integrations/microsoft/callback',
-      },
+      google: GOOGLE_CONFIG,
+      microsoft: MICROSOFT_CONFIG,
       fetchImpl: fakeFetch,
       now: () => now,
     });
     return { service, store, box, advance: (ms: number) => { now += ms; } };
   }
 
-  it('walks connect → callback → status, storing only sealed tokens', async () => {
+  async function connect(service: EmailService, provider: EmailProvider) {
+    const url = service.connectUrl(provider);
+    const state = new URL(url).searchParams.get('state') ?? '';
+    return service.handleCallback(provider, `code-${provider}`, state);
+  }
+
+  it('connects several mailboxes and reports them', async () => {
     const { service, store, box } = build();
-    const url = service.connectUrl('microsoft');
-    expect(url).toContain('login.microsoftonline.com/tenant-1/oauth2/v2.0/authorize');
-    const state = new URL(url).searchParams.get('state');
-    expect(state).toBeTruthy();
+    const ms = await connect(service, 'microsoft');
+    expect(ms.account).toBe('jesus@corpogafi.com');
+    await connect(service, 'google');
 
-    const result = await service.handleCallback('microsoft', 'the-code', state ?? '');
-    expect(result.account).toBe('jesus@corpogafi.com');
-    const row = await store.get('microsoft');
+    const row = await store.get(ms.id);
     expect(row?.sealedTokens.startsWith('v1.')).toBe(true);
-    expect(box.decrypt(row?.sealedTokens ?? '')).toContain('refresh-1');
+    expect(box.decrypt(row?.sealedTokens ?? '')).toContain('ms-refresh-1');
 
-    const statuses = await service.statuses();
-    expect(statuses.find((status) => status.provider === 'microsoft')).toMatchObject({
+    const overview = await service.statuses();
+    expect(overview.providers.find((p) => p.provider === 'google')).toMatchObject({
       configured: true,
-      connected: true,
-      account: 'jesus@corpogafi.com',
+      accounts: 1,
     });
+    expect(overview.providers.find((p) => p.provider === 'microsoft')).toMatchObject({
+      configured: true,
+      accounts: 1,
+    });
+    expect(overview.accounts.map((a) => a.account).sort()).toEqual([
+      'jesus@corpogafi.com',
+      'segundo@gmail.com',
+    ]);
+  });
+
+  it('resolves accounts by email, id and provider, and refuses ambiguity', async () => {
+    const { service } = build();
+    await connect(service, 'microsoft');
+    await connect(service, 'google');
+    const third = await connect(service, 'google');
+    expect(third.account).toBe('tercero@gmail.com');
+
+    await expect(service.list({}, { limit: 5 })).rejects.toThrow('More than one account');
+    await expect(service.list({ provider: 'google' }, { limit: 5 })).rejects.toThrow(
+      'More than one account',
+    );
+    expect(await service.list({ account: 'TERCERO@GMAIL.COM' }, { limit: 5 })).toEqual([]);
+    expect(await service.list({ account: third.id }, { limit: 5 })).toEqual([]);
+    expect(await service.list({ provider: 'microsoft' }, { limit: 5 })).toEqual([]);
   });
 
   it('rejects a forged state', async () => {
@@ -204,23 +252,42 @@ describe('EmailService (microsoft)', () => {
     await expect(service.handleCallback('microsoft', 'code', 'forged.state')).rejects.toThrow('state');
   });
 
-  it('refreshes expired access tokens and persists rotated refresh tokens', async () => {
+  it('refreshes expired access tokens and persists rotations per account', async () => {
     const { service, store, box, advance } = build();
-    const url = service.connectUrl('microsoft');
-    const state = new URL(url).searchParams.get('state') ?? '';
-    await service.handleCallback('microsoft', 'code', state);
-    advance(2 * 60 * 60 * 1000); // access token expired
-    await service.list('microsoft', { limit: 5 });
-    const row = await store.get('microsoft');
-    expect(box.decrypt(row?.sealedTokens ?? '')).toContain('refresh-2');
+    const ms = await connect(service, 'microsoft');
+    await connect(service, 'google');
+    advance(2 * 60 * 60 * 1000); // access tokens expired
+    await service.list({ account: ms.account }, { limit: 5 });
+    const row = await store.get(ms.id);
+    expect(box.decrypt(row?.sealedTokens ?? '')).toContain('ms-refresh-2');
   });
 
-  it('reports configured-but-not-connected and unconfigured providers', async () => {
+  it('disconnects by id or provider and refuses ambiguous providers', async () => {
     const { service } = build();
-    const statuses = await service.statuses();
-    expect(statuses.find((status) => status.provider === 'google')).toMatchObject({
+    const ms = await connect(service, 'microsoft');
+    await connect(service, 'google');
+    await connect(service, 'google');
+
+    await expect(service.disconnect('google')).rejects.toThrow('More than one account');
+    expect(await service.disconnect(ms.id)).toBe(true);
+    expect(await service.disconnect('microsoft')).toBe(false);
+    expect(await service.disconnect('nope')).toBe(false);
+    const overview = await service.statuses();
+    expect(overview.accounts).toHaveLength(2);
+  });
+
+  it('reports unconfigured providers', async () => {
+    const store = new InMemoryIntegrationStore();
+    const service = new EmailService({
+      store,
+      box: new SecretBox(KEY_A),
+      microsoft: MICROSOFT_CONFIG,
+      fetchImpl: vi.fn<typeof fetch>(),
+    });
+    const overview = await service.statuses();
+    expect(overview.providers.find((p) => p.provider === 'google')).toMatchObject({
       configured: false,
-      connected: false,
+      accounts: 0,
     });
     expect(() => service.connectUrl('google')).toThrow('not configured');
   });
@@ -229,9 +296,9 @@ describe('EmailService (microsoft)', () => {
 describe('integration routes', () => {
   it('guards API routes and serves the public callback', async () => {
     const service = {
-      statuses: vi.fn(async () => []),
+      statuses: vi.fn(async () => ({ providers: [], accounts: [] })),
       connectUrl: vi.fn(() => 'https://provider.example/authorize'),
-      handleCallback: vi.fn(async () => ({ account: 'a@b.c' })),
+      handleCallback: vi.fn(async () => ({ account: 'a@b.c', id: 'int-1' })),
       disconnect: vi.fn(async () => true),
       list: vi.fn(async () => []),
       read: vi.fn(async () => {
@@ -257,6 +324,25 @@ describe('integration routes', () => {
       });
       expect(connect.statusCode).toBe(200);
       expect(connect.json()).toEqual({ url: 'https://provider.example/authorize' });
+
+      const list = await app.inject({
+        method: 'GET',
+        url: '/email/list?provider=google&account=ana%40example.com&limit=3',
+        headers: { authorization: 'Bearer test-token' },
+      });
+      expect(list.statusCode).toBe(200);
+      expect(service.list).toHaveBeenCalledWith(
+        { provider: 'google', account: 'ana@example.com' },
+        { limit: 3 },
+      );
+
+      const del = await app.inject({
+        method: 'DELETE',
+        url: '/integrations/int-1',
+        headers: { authorization: 'Bearer test-token' },
+      });
+      expect(del.statusCode).toBe(200);
+      expect(service.disconnect).toHaveBeenCalledWith('int-1');
 
       const callback = await app.inject({
         method: 'GET',

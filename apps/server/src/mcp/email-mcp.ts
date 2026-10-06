@@ -32,8 +32,9 @@ const TOOLS = [
   {
     name: 'email_accounts',
     description:
-      'List email accounts (Gmail / Microsoft 365) known to Doty: whether each provider is configured ' +
-      'on the server and whether an account is connected. No arguments.',
+      'List email accounts known to Doty: which providers (Gmail / Microsoft 365) are configured on the ' +
+      'server and which mailboxes are connected, each with its account email and id. Use the account email ' +
+      'or id with email_list/email_read when more than one mailbox is connected. No arguments.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
@@ -47,7 +48,8 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        provider: { type: 'string', enum: ['google', 'microsoft'], description: 'Defaults to the only connected account.' },
+        account: { type: 'string', description: 'Account email or id from email_accounts; omit only if a single mailbox is connected.' },
+        provider: { type: 'string', enum: ['google', 'microsoft'], description: 'Restrict to a provider; fails if it has several accounts.' },
         query: { type: 'string', description: 'Optional provider-side search query.' },
         limit: { type: 'integer', minimum: 1, maximum: 25, description: 'How many messages (default 10, max 25).' },
       },
@@ -63,7 +65,8 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        provider: { type: 'string', enum: ['google', 'microsoft'], description: 'Defaults to the only connected account.' },
+        account: { type: 'string', description: 'Account email or id from email_accounts; omit only if a single mailbox is connected.' },
+        provider: { type: 'string', enum: ['google', 'microsoft'], description: 'Restrict to a provider; fails if it has several accounts.' },
         id: { type: 'string', description: 'Message id returned by email_list.' },
       },
       required: ['id'],
@@ -114,6 +117,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
     const params = new URLSearchParams();
     const provider = optionalProvider(args.provider);
     if (provider) params.set('provider', provider);
+    if (typeof args.account === 'string' && args.account.trim()) params.set('account', args.account.trim());
     if (typeof args.query === 'string' && args.query.trim()) params.set('query', args.query.trim());
     const limit =
       typeof args.limit === 'number' && Number.isFinite(args.limit)
@@ -127,6 +131,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
     const params = new URLSearchParams({ id: requireString(args.id, 'id') });
     const provider = optionalProvider(args.provider);
     if (provider) params.set('provider', provider);
+    if (typeof args.account === 'string' && args.account.trim()) params.set('account', args.account.trim());
     return callApi(`/email/read?${params.toString()}`);
   }
 

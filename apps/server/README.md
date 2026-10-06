@@ -83,15 +83,19 @@ native fetch.
 
 Read-only mailbox access for the agent. Enabled when `DATABASE_URL` and
 `DOTY_CRED_KEY` are set; each provider is independent, so a missing client
-id/secret pair simply reports `configured: false` in status.
+id/secret pair simply reports `configured: false` in status. **Multiple
+mailboxes per provider are supported** — each connected account has an id and
+an account email; `account` selects one (an email address or the id), and with
+a single mailbox it can be omitted. Selecting an account when several match
+returns `409 ambiguous_account` with the candidates.
 
 ```text
 POST   /integrations/:provider/connect    → { url }  (bearer; open in a browser)
 GET    /integrations/:provider/callback   → consent redirect target (public, state-signed)
-GET    /integrations                      → provider status (bearer)
-DELETE /integrations/:provider            → disconnect (bearer)
-GET    /email/list?provider=&query=&limit=10  → message summaries (bearer)
-GET    /email/read?provider=&id=              → one plain-text body (bearer)
+GET    /integrations                      → providers + connected accounts (bearer)
+DELETE /integrations/:target              → disconnect an account id or provider (bearer)
+GET    /email/list?account=&provider=&query=&limit=10  → message summaries (bearer)
+GET    /email/read?account=&provider=&id=              → one plain-text body (bearer)
 ```
 
 - Tokens: refresh tokens are sealed with AES-256-GCM (`DOTY_CRED_KEY`) before

@@ -44,6 +44,8 @@ export function microsoftAuthUrl(config: MicrosoftConfig, state: string): string
     redirect_uri: config.redirectUri,
     response_mode: 'query',
     scope: MICROSOFT_SCOPES.join(' '),
+    // Show the account chooser so multiple mailboxes can be connected.
+    prompt: 'select_account',
     state,
   });
   return `https://login.microsoftonline.com/${encodeURIComponent(config.tenantId)}/oauth2/v2.0/authorize?${params.toString()}`;

@@ -2,6 +2,8 @@
  * Email integration service: OAuth connect URLs, callbacks, token refresh and
  * read-only mailbox access, provider-agnostic.
  *
+ * Multiple accounts per provider are supported. Each connected mailbox is an
+ * `integration` row; callers select one by email address or integration id.
  * The desktop (or a curl on the server) asks for a connect URL; the browser
  * completes consent; the callback stores the sealed refresh token; every read
  * path refreshes short-lived access tokens in memory and persists rotations.
@@ -29,12 +31,14 @@ import {
 import { PgIntegrationStore, type IntegrationStore, type StoredIntegration } from './store.js';
 import {
   EMAIL_PROVIDERS,
+  isEmailProvider,
   type EmailClient,
   type EmailListOptions,
   type EmailMessage,
   type EmailProvider,
+  type EmailSelector,
   type EmailSummary,
-  type IntegrationStatus,
+  type IntegrationOverview,
   type OAuthTokens,
 } from './types.js';
 
@@ -47,8 +51,8 @@ export class NotConfiguredError extends Error {
 
 export class NotConnectedError extends Error {
   readonly code = 'not_connected';
-  constructor(readonly provider: string) {
-    super(`No ${provider} account is connected`);
+  constructor(readonly target: string) {
+    super(target === 'email' ? 'No email account is connected' : `No connected account matches "${target}"`);
   }
 }
 
@@ -59,10 +63,10 @@ export class InvalidStateError extends Error {
   }
 }
 
-export class AmbiguousProviderError extends Error {
-  readonly code = 'ambiguous_provider';
-  constructor(readonly providers: EmailProvider[]) {
-    super(`More than one account is connected (${providers.join(', ')}); specify a provider`);
+export class AmbiguousAccountError extends Error {
+  readonly code = 'ambiguous_account';
+  constructor(readonly accounts: string[]) {
+    super(`More than one account matches (${accounts.join(', ')}); specify an account`);
   }
 }
 
@@ -92,7 +96,7 @@ export class EmailService {
   readonly #box: SecretBox;
   readonly #now: () => number;
   readonly #handles = new Map<EmailProvider, ProviderHandle>();
-  readonly #tokens = new Map<EmailProvider, { accessToken: string; expiresAt: number }>();
+  readonly #tokens = new Map<string, { accessToken: string; expiresAt: number }>();
 
   constructor(options: EmailServiceOptions) {
     this.#store = options.store;
@@ -126,19 +130,23 @@ export class EmailService {
     return [...this.#handles.keys()];
   }
 
-  async statuses(): Promise<IntegrationStatus[]> {
+  async statuses(): Promise<IntegrationOverview> {
     const rows = await this.#store.list();
-    const byProvider = new Map(rows.map((row) => [row.provider, row]));
-    return EMAIL_PROVIDERS.map((provider) => {
-      const row = byProvider.get(provider);
-      return {
+    return {
+      providers: EMAIL_PROVIDERS.map((provider) => ({
         provider,
         configured: this.#handles.has(provider),
-        connected: Boolean(row),
-        ...(row?.account ? { account: row.account } : {}),
-        ...(row?.scopes ? { scopes: row.scopes } : {}),
-      };
-    });
+        accounts: rows.filter((row) => row.provider === provider && row.account).length,
+      })),
+      accounts: rows
+        .filter((row) => Boolean(row.account))
+        .map((row) => ({
+          id: row.id,
+          provider: row.provider,
+          account: row.account ?? '',
+          ...(row.scopes ? { scopes: row.scopes } : {}),
+        })),
+    };
   }
 
   /** Signed authorize URL; the caller opens it in a browser (desktop/system). */
@@ -152,30 +160,46 @@ export class EmailService {
     provider: EmailProvider,
     code: string,
     state: string,
-  ): Promise<{ account?: string }> {
+  ): Promise<{ account: string; id: string }> {
     const handle = this.#handle(provider);
     const payload = this.#box.verifyState(state, this.#now());
     if (!payload || payload.provider !== provider) throw new InvalidStateError();
     const tokens = await handle.exchange(code);
-    const account = await handle.accountEmail(tokens.accessToken).catch(() => undefined);
-    await this.#persist(provider, tokens, account);
-    return account ? { account } : {};
+    const account = await handle.accountEmail(tokens.accessToken);
+    if (!account) throw new Error('Could not determine the account email from the provider');
+    const row = await this.#persist(provider, account, tokens);
+    return { account, id: row.id };
   }
 
-  async disconnect(provider: EmailProvider): Promise<boolean> {
-    this.#tokens.delete(provider);
-    return this.#store.remove(provider);
+  /**
+   * Disconnect one mailbox: accepts an integration id, or a provider name when
+   * exactly one account of that provider is connected.
+   */
+  async disconnect(target: string): Promise<boolean> {
+    const rows = await this.#store.list();
+
+    const byId = rows.find((row) => row.id === target);
+    if (byId) return this.#removeOne(byId);
+
+    if (!isEmailProvider(target)) return false;
+    const matches = rows.filter((row) => row.provider === target);
+    if (matches.length === 0) return false;
+    if (matches.length > 1) {
+      throw new AmbiguousAccountError(matches.map((row) => row.account ?? row.id));
+    }
+    const single = matches[0];
+    return single ? this.#removeOne(single) : false;
   }
 
-  async list(provider: EmailProvider | undefined, options: EmailListOptions): Promise<EmailSummary[]> {
-    const resolved = await this.#resolveProvider(provider);
-    const { handle, accessToken } = await this.#accessToken(resolved);
+  async list(selector: EmailSelector, options: EmailListOptions): Promise<EmailSummary[]> {
+    const row = await this.#resolve(selector);
+    const { handle, accessToken } = await this.#accessToken(row);
     return handle.client(accessToken).list(options);
   }
 
-  async read(provider: EmailProvider | undefined, id: string): Promise<EmailMessage> {
-    const resolved = await this.#resolveProvider(provider);
-    const { handle, accessToken } = await this.#accessToken(resolved);
+  async read(selector: EmailSelector, id: string): Promise<EmailMessage> {
+    const row = await this.#resolve(selector);
+    const { handle, accessToken } = await this.#accessToken(row);
     return handle.client(accessToken).read(id);
   }
 
@@ -189,40 +213,67 @@ export class EmailService {
     return handle;
   }
 
-  /** Without an explicit provider, pick the only connected account. */
-  async #resolveProvider(provider: EmailProvider | undefined): Promise<EmailProvider> {
-    if (provider) return provider;
+  async #removeOne(row: StoredIntegration): Promise<boolean> {
+    this.#tokens.delete(row.id);
+    return this.#store.remove(row.id);
+  }
+
+  /** Resolve a selector to one connected mailbox, or fail with a clear error. */
+  async #resolve(selector: EmailSelector): Promise<StoredIntegration> {
     const rows = await this.#store.list();
-    if (rows.length === 1 && rows[0]) return rows[0].provider;
     if (rows.length === 0) throw new NotConnectedError('email');
-    throw new AmbiguousProviderError(rows.map((row) => row.provider));
+
+    if (selector.account) {
+      const needle = selector.account.trim().toLowerCase();
+      const matches = rows.filter(
+        (row) => row.id === selector.account || row.account?.toLowerCase() === needle,
+      );
+      if (matches.length === 0) throw new NotConnectedError(selector.account);
+      const account = matches[0];
+      if (matches.length === 1 && account) return account;
+      throw new AmbiguousAccountError(matches.map((row) => row.account ?? row.id));
+    }
+
+    if (selector.provider) {
+      const matches = rows.filter((row) => row.provider === selector.provider);
+      if (matches.length === 0) throw new NotConnectedError(selector.provider);
+      const account = matches[0];
+      if (matches.length === 1 && account) return account;
+      throw new AmbiguousAccountError(matches.map((row) => row.account ?? row.id));
+    }
+
+    const only = rows[0];
+    if (rows.length === 1 && only) return only;
+    throw new AmbiguousAccountError(rows.map((row) => row.account ?? row.id));
   }
 
   async #accessToken(
-    provider: EmailProvider,
+    row: StoredIntegration,
   ): Promise<{ handle: ProviderHandle; accessToken: string }> {
-    const handle = this.#handle(provider);
-    const cached = this.#tokens.get(provider);
+    const handle = this.#handle(row.provider);
+    const cached = this.#tokens.get(row.id);
     if (cached && cached.expiresAt - ACCESS_TOKEN_MARGIN_MS > this.#now()) {
       return { handle, accessToken: cached.accessToken };
     }
 
-    const row = await this.#store.get(provider);
-    if (!row) throw new NotConnectedError(provider);
+    if (!row.account) throw new Error('Stored integration has no account email');
     const stored = this.#readSealed(row);
-    if (!stored.refreshToken) throw new NotConnectedError(provider);
+    if (!stored.refreshToken) throw new NotConnectedError(row.account);
 
     const refreshed = await handle.refresh(stored.refreshToken);
-    await this.#persist(provider, refreshed, row.account);
+    await this.#persist(row.provider, row.account, refreshed);
     return { handle, accessToken: refreshed.accessToken };
   }
 
   async #persist(
     provider: EmailProvider,
+    account: string,
     tokens: OAuthTokens,
-    account: string | undefined,
-  ): Promise<void> {
-    const existing = await this.#store.get(provider);
+  ): Promise<StoredIntegration> {
+    const rows = await this.#store.list();
+    const existing = rows.find(
+      (row) => row.provider === provider && row.account?.toLowerCase() === account.toLowerCase(),
+    );
     const previous = existing ? this.#readSealed(existing) : undefined;
     const refreshToken = tokens.refreshToken ?? previous?.refreshToken;
     if (!refreshToken) throw new Error(`${provider} did not return a refresh token`);
@@ -231,14 +282,15 @@ export class EmailService {
     const sealedTokens = this.#box.encrypt(
       JSON.stringify({ v: 1, refreshToken, ...(scope ? { scope } : {}) }),
     );
-    await this.#store.upsert({
+    const row = await this.#store.upsert({
       provider,
-      account: account ?? existing?.account,
+      account,
       scopes: scope ?? existing?.scopes,
       sealedTokens,
       tokenExpiresAt: tokens.expiresAt,
     });
-    this.#tokens.set(provider, { accessToken: tokens.accessToken, expiresAt: tokens.expiresAt });
+    this.#tokens.set(row.id, { accessToken: tokens.accessToken, expiresAt: tokens.expiresAt });
+    return row;
   }
 
   #readSealed(row: StoredIntegration): { refreshToken?: string; scope?: string } {

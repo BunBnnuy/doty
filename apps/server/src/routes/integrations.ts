@@ -1,23 +1,25 @@
 /**
  * Email integration routes.
  *
- * - `GET    /integrations`                     → status per provider (guarded)
+ * - `GET    /integrations`                     → connected accounts + provider status (guarded)
  * - `POST   /integrations/:provider/connect`   → signed authorize URL (guarded)
  * - `GET    /integrations/:provider/callback`  → browser redirect target (public, state-verified)
- * - `DELETE /integrations/:provider`           → disconnect (guarded)
+ * - `DELETE /integrations/:target`             → disconnect an account id or provider (guarded)
  * - `GET    /email/list`                       → message summaries (guarded)
  * - `GET    /email/read`                       → one message body (guarded)
  *
- * The callback is the only public route: it is a top-level browser navigation
- * that cannot carry the bearer token, so it relies on the HMAC-signed `state`
- * produced by `connect`. Everything else stays behind `DOTY_TOKEN`.
+ * Multiple accounts per provider are supported: `account` (an email address or
+ * integration id) selects the mailbox; with a single connected account it can
+ * be omitted. The callback is the only public route — a top-level browser
+ * navigation cannot carry the bearer token, so it relies on the HMAC-signed
+ * `state` produced by `connect`.
  */
 
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import type { EventLog } from '../events/log.js';
 import {
-  AmbiguousProviderError,
+  AmbiguousAccountError,
   InvalidStateError,
   NotConfiguredError,
   NotConnectedError,
@@ -26,21 +28,23 @@ import {
   isEmailProvider,
   type EmailMessage,
   type EmailProvider,
+  type EmailSelector,
   type EmailSummary,
-  type IntegrationStatus,
+  type IntegrationOverview,
 } from '../integrations/email/types.js';
 
 /** Structural contract so routes stay testable without a real service. */
 export interface IntegrationRoutesService {
-  statuses(): Promise<IntegrationStatus[]>;
+  statuses(): Promise<IntegrationOverview>;
   connectUrl(provider: EmailProvider): string;
-  handleCallback(provider: EmailProvider, code: string, state: string): Promise<{ account?: string }>;
-  disconnect(provider: EmailProvider): Promise<boolean>;
-  list(
-    provider: EmailProvider | undefined,
-    options: { query?: string; limit: number },
-  ): Promise<EmailSummary[]>;
-  read(provider: EmailProvider | undefined, id: string): Promise<EmailMessage>;
+  handleCallback(
+    provider: EmailProvider,
+    code: string,
+    state: string,
+  ): Promise<{ account?: string; id?: string }>;
+  disconnect(target: string): Promise<boolean>;
+  list(selector: EmailSelector, options: { query?: string; limit: number }): Promise<EmailSummary[]>;
+  read(selector: EmailSelector, id: string): Promise<EmailMessage>;
 }
 
 const callbackQuerySchema = z.object({
@@ -53,12 +57,14 @@ const callbackQuerySchema = z.object({
 
 const listQuerySchema = z.object({
   provider: z.string().optional(),
+  account: z.string().min(1).max(320).optional(),
   query: z.string().max(500).optional(),
   limit: z.coerce.number().int().min(1).max(25).optional(),
 });
 
 const readQuerySchema = z.object({
   provider: z.string().optional(),
+  account: z.string().min(1).max(320).optional(),
   id: z.string().min(1).max(1_024),
 });
 
@@ -67,7 +73,7 @@ export function registerIntegrationRoutes(
   service: IntegrationRoutesService,
   log?: EventLog,
 ): void {
-  app.get('/integrations', async () => ({ integrations: await service.statuses() }));
+  app.get('/integrations', async () => service.statuses());
 
   app.post('/integrations/:provider/connect', async (request, reply) => {
     const provider = readProvider(request.params);
@@ -128,22 +134,26 @@ export function registerIntegrationRoutes(
     }
   });
 
-  app.delete('/integrations/:provider', async (request, reply) => {
-    const provider = readProvider(request.params);
-    if (!provider) return reply.code(404).send({ error: 'unknown_provider' });
-    const removed = await service.disconnect(provider);
-    if (removed) log?.append({ type: 'integration_disconnected', data: { provider } });
-    return { ok: true, removed };
+  app.delete('/integrations/:target', async (request, reply) => {
+    const target = readTarget(request.params);
+    if (!target) return reply.code(404).send({ error: 'unknown_target' });
+    try {
+      const removed = await service.disconnect(target);
+      if (removed) log?.append({ type: 'integration_disconnected', data: { target } });
+      return { ok: true, removed };
+    } catch (error) {
+      return sendServiceError(reply, error);
+    }
   });
 
   app.get('/email/list', async (request, reply) => {
     const parsed = listQuerySchema.safeParse(request.query);
     if (!parsed.success) return reply.code(400).send({ error: 'invalid_query' });
-    const provider = await resolveProvider(reply, parsed.data.provider);
-    if (provider === INVALID) return;
+    const selector = readSelector(reply, parsed.data.provider, parsed.data.account);
+    if (selector === INVALID) return;
     try {
       return {
-        messages: await service.list(provider, {
+        messages: await service.list(selector, {
           ...(parsed.data.query ? { query: parsed.data.query } : {}),
           limit: parsed.data.limit ?? 10,
         }),
@@ -156,17 +166,17 @@ export function registerIntegrationRoutes(
   app.get('/email/read', async (request, reply) => {
     const parsed = readQuerySchema.safeParse(request.query);
     if (!parsed.success) return reply.code(400).send({ error: 'invalid_query' });
-    const provider = await resolveProvider(reply, parsed.data.provider);
-    if (provider === INVALID) return;
+    const selector = readSelector(reply, parsed.data.provider, parsed.data.account);
+    if (selector === INVALID) return;
     try {
-      return { message: await service.read(provider, parsed.data.id) };
+      return { message: await service.read(selector, parsed.data.id) };
     } catch (error) {
       return sendServiceError(reply, error);
     }
   });
 }
 
-/** Sentinel so a failed provider parse short-circuits without extra types. */
+/** Sentinel so a failed selector parse short-circuits without extra types. */
 const INVALID = Symbol('invalid');
 
 function readProvider(params: unknown): EmailProvider | undefined {
@@ -174,16 +184,26 @@ function readProvider(params: unknown): EmailProvider | undefined {
   return isEmailProvider(value) ? value : undefined;
 }
 
-async function resolveProvider(
+function readTarget(params: unknown): string | undefined {
+  const value = (params as { target?: unknown })?.target;
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function readSelector(
   reply: FastifyReply,
-  raw: string | undefined,
-): Promise<EmailProvider | undefined | typeof INVALID> {
-  if (raw === undefined) return undefined;
-  if (!isEmailProvider(raw)) {
-    await reply.code(400).send({ error: 'invalid_provider' });
-    return INVALID;
+  rawProvider: string | undefined,
+  rawAccount: string | undefined,
+): EmailSelector | typeof INVALID {
+  const selector: EmailSelector = {};
+  if (rawProvider !== undefined) {
+    if (!isEmailProvider(rawProvider)) {
+      void reply.code(400).send({ error: 'invalid_provider' });
+      return INVALID;
+    }
+    selector.provider = rawProvider;
   }
-  return raw;
+  if (rawAccount !== undefined) selector.account = rawAccount;
+  return selector;
 }
 
 function sendServiceError(reply: FastifyReply, error: unknown): FastifyReply {
@@ -193,10 +213,10 @@ function sendServiceError(reply: FastifyReply, error: unknown): FastifyReply {
   if (error instanceof NotConnectedError) {
     return reply.code(409).send({ error: error.code, message: error.message });
   }
-  if (error instanceof AmbiguousProviderError) {
+  if (error instanceof AmbiguousAccountError) {
     return reply
       .code(409)
-      .send({ error: error.code, message: error.message, providers: error.providers });
+      .send({ error: error.code, message: error.message, accounts: error.accounts });
   }
   throw error;
 }

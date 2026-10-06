@@ -41,7 +41,8 @@ export function googleAuthUrl(config: GoogleConfig, state: string): string {
     response_type: 'code',
     scope: GOOGLE_SCOPES.join(' '),
     access_type: 'offline',
-    prompt: 'consent',
+    // `select_account` shows the account chooser so a second mailbox can be added.
+    prompt: 'consent select_account',
     include_granted_scopes: 'true',
     state,
   });

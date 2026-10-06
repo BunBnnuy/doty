@@ -1,6 +1,6 @@
 /**
- * Persistence for connected email accounts. One row per provider today
- * (single-user instance); the schema shape allows more accounts later.
+ * Persistence for connected email accounts. Multiple accounts per provider are
+ * allowed; a row is identified by its id and matched by `(provider, account)`.
  *
  * `sealedTokens` is opaque ciphertext produced by `SecretBox` — plaintext
  * tokens never touch this layer. The minimal query surface keeps the Postgres
@@ -36,9 +36,9 @@ export interface UpsertIntegrationInput {
 
 export interface IntegrationStore {
   list(): Promise<StoredIntegration[]>;
-  get(provider: EmailProvider): Promise<StoredIntegration | undefined>;
+  get(id: string): Promise<StoredIntegration | undefined>;
   upsert(input: UpsertIntegrationInput): Promise<StoredIntegration>;
-  remove(provider: EmailProvider): Promise<boolean>;
+  remove(id: string): Promise<boolean>;
   close(): Promise<void>;
 }
 
@@ -89,17 +89,17 @@ export class PgIntegrationStore implements IntegrationStore {
     const result = await this.#pool.query(
       `SELECT ${JOIN_COLUMNS} FROM ${INTEGRATIONS} i
        LEFT JOIN ${CREDENTIALS} c ON c.integration_id = i.id AND c.kind = 'oauth_token'
-       ORDER BY i.provider ASC`,
+       ORDER BY i.provider ASC, i.account ASC`,
     );
     return result.rows.map(fromRow).filter((row): row is StoredIntegration => row !== undefined);
   }
 
-  async get(provider: EmailProvider): Promise<StoredIntegration | undefined> {
+  async get(id: string): Promise<StoredIntegration | undefined> {
     const result = await this.#pool.query(
       `SELECT ${JOIN_COLUMNS} FROM ${INTEGRATIONS} i
        LEFT JOIN ${CREDENTIALS} c ON c.integration_id = i.id AND c.kind = 'oauth_token'
-       WHERE i.provider = $1`,
-      [provider],
+       WHERE i.id = $1`,
+      [id],
     );
     const row = result.rows[0];
     return row ? fromRow(row) : undefined;
@@ -111,8 +111,7 @@ export class PgIntegrationStore implements IntegrationStore {
       `WITH upsert_integration AS (
          INSERT INTO ${INTEGRATIONS} (provider, account, scopes, status, updated_at)
          VALUES ($1, $2, $3, 'connected', now())
-         ON CONFLICT (provider) DO UPDATE SET
-           account = EXCLUDED.account,
+         ON CONFLICT (provider, account) DO UPDATE SET
            scopes = EXCLUDED.scopes,
            status = 'connected',
            updated_at = now()
@@ -143,10 +142,10 @@ export class PgIntegrationStore implements IntegrationStore {
     return mapped;
   }
 
-  async remove(provider: EmailProvider): Promise<boolean> {
+  async remove(id: string): Promise<boolean> {
     const result = await this.#pool.query(
-      `DELETE FROM ${INTEGRATIONS} WHERE provider = $1 RETURNING id`,
-      [provider],
+      `DELETE FROM ${INTEGRATIONS} WHERE id = $1 RETURNING id`,
+      [id],
     );
     return result.rows.length > 0;
   }
@@ -158,19 +157,22 @@ export class PgIntegrationStore implements IntegrationStore {
 
 /** Used by tests; the production entrypoint always selects the Postgres store. */
 export class InMemoryIntegrationStore implements IntegrationStore {
-  readonly #rows = new Map<EmailProvider, StoredIntegration>();
+  readonly #rows = new Map<string, StoredIntegration>();
 
   async list(): Promise<StoredIntegration[]> {
     return [...this.#rows.values()];
   }
 
-  async get(provider: EmailProvider): Promise<StoredIntegration | undefined> {
-    return this.#rows.get(provider);
+  async get(id: string): Promise<StoredIntegration | undefined> {
+    return this.#rows.get(id);
   }
 
   async upsert(input: UpsertIntegrationInput): Promise<StoredIntegration> {
+    const existing = [...this.#rows.values()].find(
+      (row) => row.provider === input.provider && row.account === input.account,
+    );
     const row: StoredIntegration = {
-      id: this.#rows.get(input.provider)?.id ?? randomUUID(),
+      id: existing?.id ?? randomUUID(),
       provider: input.provider,
       account: input.account,
       scopes: input.scopes,
@@ -179,12 +181,12 @@ export class InMemoryIntegrationStore implements IntegrationStore {
       tokenExpiresAt: input.tokenExpiresAt,
       updatedAt: new Date(),
     };
-    this.#rows.set(input.provider, row);
+    this.#rows.set(row.id, row);
     return row;
   }
 
-  async remove(provider: EmailProvider): Promise<boolean> {
-    return this.#rows.delete(provider);
+  async remove(id: string): Promise<boolean> {
+    return this.#rows.delete(id);
   }
 
   async close(): Promise<void> {

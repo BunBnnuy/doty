@@ -49,7 +49,7 @@ const GUARDED_ROUTES = new Set([
   '/harness-notice',
   '/integrations',
   '/integrations/:provider/connect',
-  '/integrations/:provider',
+  '/integrations/:target',
   '/email/list',
   '/email/read',
 ]);

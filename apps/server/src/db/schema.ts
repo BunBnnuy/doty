@@ -193,8 +193,8 @@ export const approvals = pgTable('approvals', {
 });
 
 /**
- * Connected third-party accounts (Gmail / Microsoft 365). One row per provider
- * today (single-user instance); the shape leaves room for more accounts later.
+ * Connected third-party accounts (Gmail / Microsoft 365). Multiple accounts
+ * per provider are allowed; `(provider, account)` identifies one mailbox.
  */
 export const integrations = pgTable(
   'integrations',
@@ -209,7 +209,7 @@ export const integrations = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [uniqueIndex('integrations_provider_unique').on(table.provider)],
+  (table) => [uniqueIndex('integrations_provider_account_unique').on(table.provider, table.account)],
 );
 
 /**

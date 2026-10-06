@@ -45,13 +45,31 @@ export interface EmailClient {
   read(id: string): Promise<EmailMessage>;
 }
 
-export interface IntegrationStatus {
+export interface ConnectedAccount {
+  /** Stable integration id (also accepted as `account` by the email endpoints). */
+  id: string;
+  provider: EmailProvider;
+  account: string;
+  scopes?: string;
+}
+
+export interface ProviderStatus {
   provider: EmailProvider;
   /** Provider credentials (client id/secret) present in the server env. */
   configured: boolean;
-  connected: boolean;
+  /** Number of connected mailboxes for this provider. */
+  accounts: number;
+}
+
+export interface IntegrationOverview {
+  providers: ProviderStatus[];
+  accounts: ConnectedAccount[];
+}
+
+/** Selects one connected mailbox; `account` is an email address or integration id. */
+export interface EmailSelector {
+  provider?: EmailProvider;
   account?: string;
-  scopes?: string;
 }
 
 export interface OAuthTokens {
