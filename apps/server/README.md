@@ -151,6 +151,12 @@ audio: `doty play <url|search>`, `doty skip`, `doty stop` (leave), `doty pause`,
 `@discordjs/voice` + `libsodium-wrappers` + `opusscript` dependencies. It uses the
 `GUILD_VOICE_STATES` intent to find your channel.
 
+YouTube blocks many datacenter IPs ("Sign in to confirm you're not a bot"). Set
+`YTDLP_COOKIES=/path/cookies.txt` (a Netscape cookies export from a logged-in
+browser) to use YouTube, or point `YTDLP_SEARCH` at another source — e.g.
+`scsearch1:` for SoundCloud, which works without cookies. `YTDLP_EXTRA_ARGS`
+passes extra yt-dlp flags.
+
 **Speech (TTS).** When Doty is in a voice channel it also *speaks* its replies
 using local `piper`. `doty join` makes it join without music, and `doty say <text>`
 makes it say something. Configure `PIPER_BIN` (the piper executable) and

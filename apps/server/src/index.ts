@@ -90,6 +90,11 @@ async function main(): Promise<void> {
       log: (message) => app.log.info(message),
       ...(process.env.PIPER_BIN?.trim() ? { piperBin: process.env.PIPER_BIN.trim() } : {}),
       ...(process.env.PIPER_VOICE?.trim() ? { piperVoice: process.env.PIPER_VOICE.trim() } : {}),
+      track: {
+        ...(process.env.YTDLP_COOKIES?.trim() ? { cookies: process.env.YTDLP_COOKIES.trim() } : {}),
+        ...(process.env.YTDLP_SEARCH?.trim() ? { search: process.env.YTDLP_SEARCH.trim() } : {}),
+        ...(process.env.YTDLP_EXTRA_ARGS?.trim() ? { extraArgs: process.env.YTDLP_EXTRA_ARGS.trim().split(/\s+/) } : {}),
+      },
     });
     discord = startDiscordBot({
       token: discordToken,

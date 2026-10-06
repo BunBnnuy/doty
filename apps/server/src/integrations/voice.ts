@@ -84,11 +84,21 @@ function logChild(label: string, child: ChildProcess, onError?: (message: string
 }
 
 /** yt-dlp -> ffmpeg -> raw PCM stream for music. */
-export function createTrackStream(query: string, onError?: (message: string) => void): Readable {
-  const target = /^https?:\/\//i.test(query) ? query : `ytsearch1:${query}`;
-  const ytdlp = spawn('yt-dlp', ['-f', 'bestaudio/best', '--no-playlist', '--no-warnings', '-o', '-', target], {
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+export interface TrackOptions {
+  /** Netscape cookies.txt path (needed when YouTube asks to "confirm you're not a bot"). */
+  cookies?: string;
+  /** yt-dlp search prefix for non-URL queries. Default `ytsearch1:`. */
+  search?: string;
+  extraArgs?: readonly string[];
+}
+
+export function createTrackStream(query: string, options: TrackOptions = {}, onError?: (message: string) => void): Readable {
+  const target = /^https?:\/\//i.test(query) ? query : `${options.search ?? 'ytsearch1:'}${query}`;
+  const args = ['-f', 'bestaudio/best', '--no-playlist', '--no-warnings'];
+  if (options.cookies) args.push('--cookies', options.cookies);
+  if (options.extraArgs?.length) args.push(...options.extraArgs);
+  args.push('-o', '-', target);
+  const ytdlp = spawn('yt-dlp', args, { stdio: ['ignore', 'pipe', 'pipe'] });
   const ffmpeg = spawn(
     'ffmpeg',
     ['-hide_banner', '-loglevel', 'error', '-i', 'pipe:0', '-vn', '-f', 's16le', '-ar', '48000', '-ac', '2', 'pipe:1'],
@@ -150,6 +160,8 @@ export interface VoiceManagerOptions {
   piperVoice?: string;
   /** Max characters spoken per reply. */
   maxSpeechChars?: number;
+  /** yt-dlp options (cookies / search prefix). */
+  track?: TrackOptions;
 }
 
 const DEFAULT_PIPER_BIN = '/opt/vtamigo/backend/piper/piper/piper';
@@ -163,6 +175,7 @@ export class VoiceManager {
   readonly #piperBin: string;
   readonly #piperVoice: string;
   readonly #maxSpeechChars: number;
+  readonly #track: TrackOptions;
   #send: ((payload: unknown) => boolean) | undefined;
 
   constructor(options: VoiceManagerOptions = {}) {
@@ -170,6 +183,7 @@ export class VoiceManager {
     this.#piperBin = options.piperBin ?? DEFAULT_PIPER_BIN;
     this.#piperVoice = options.piperVoice ?? DEFAULT_PIPER_VOICE;
     this.#maxSpeechChars = options.maxSpeechChars ?? 400;
+    this.#track = options.track ?? {};
   }
 
   /** The raw gateway sender (installed once the socket is open). */
@@ -270,7 +284,7 @@ export class VoiceManager {
 
   #start(guild: GuildPlayer, query: string): void {
     guild.current = query;
-    const stream = createTrackStream(query, (message) => this.#log(`voice: ${message}`));
+    const stream = createTrackStream(query, this.#track, (message) => this.#log(`voice: ${message}`));
     guild.player.play(createAudioResource(stream, { inputType: StreamType.Raw }));
   }
 
