@@ -110,6 +110,25 @@ npm test                       # every workspace's vitest suite
 
 Per workspace: `npm -w @doty/server run typecheck`, `npm -w @doty/desktop run test`, etc.
 
+## Deployment
+
+CI runs on every push and pull request: it builds the contract packages and
+`@doty/avatar`, then typechecks and tests every workspace
+(`.github/workflows/ci.yml`).
+
+Pushing to `master` deploys the server to the always-on host
+(`.github/workflows/deploy.yml`, gated by the same checks):
+
+1. SSH into the host and `git fetch` + `git reset --hard origin/master`.
+2. `npm ci` only when `package-lock.json` changed.
+3. Rebuild the contract packages and restart the `doty-server` service.
+
+The host holds a **read-only** deploy key for this repository (so it can fetch),
+and GitHub holds `KB_HOST`, `KB_USER` and `KB_SSH_KEY` (a restricted key that
+grants SSH access to the host). Local files such as `.env` and `cookies.txt` are
+git-ignored and untouched by the deploy. The desktop client is **not** deployed
+this way — it is built and run on your own machine.
+
 ## Contracts (frozen)
 
 | Contract | Package | Consumers |
