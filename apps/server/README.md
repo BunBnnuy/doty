@@ -102,7 +102,7 @@ GET    /email/read?provider=&id=              → one plain-text body (bearer)
 - Email bodies are **untrusted input**: they are data, never instructions. The
   policy treatment lives in the tool descriptions (HTTP and MCP); no layer
   executes requests found inside a message.
-- OAuth `state` is HMAC-signed under the same key and expires after 15 minutes;
+- OAuth `state` is HMAC-signed under the same key and expires after 60 minutes;
   the callback is the only public route and only accepts a valid `state`.
 
 OpenCode (the production agent backend) gets these tools through the stdio MCP
