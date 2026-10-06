@@ -12,3 +12,7 @@ target/
 *.db
 *.db-*
 .worktrees/
+
+# Local-only artifacts and credentials (never commit)
+cookies.txt
+--Frag*
