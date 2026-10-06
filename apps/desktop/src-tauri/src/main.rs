@@ -109,6 +109,32 @@ fn hide_main<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
+/// Recenter the floating dot on its monitor and bring it to the front.
+///
+/// The webview repositions the window on every bubble/panel transition (see
+/// `fitSpeechWindow` / `setPanelOpen` in `src/main.ts`), which can let the dot
+/// drift off-view over time. Double-clicking the tray anchor is the escape
+/// hatch: it snaps the window back to the middle of the screen it is on,
+/// falling back to the primary monitor when that cannot be resolved.
+fn center_main<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
+        let monitor = window
+            .current_monitor()
+            .ok()
+            .flatten()
+            .or_else(|| window.primary_monitor().ok().flatten());
+        if let (Some(monitor), Ok(size)) = (monitor, window.outer_size()) {
+            let origin = monitor.position();
+            let screen = monitor.size();
+            let x = origin.x + (screen.width as i32 - size.width as i32) / 2;
+            let y = origin.y + (screen.height as i32 - size.height as i32) / 2;
+            let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+        }
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
 fn install_tray<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
     let settings = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
     let hide = MenuItem::with_id(app, "hide", "Hide Doty", true, None::<&str>)?;
@@ -129,15 +155,19 @@ fn install_tray<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
             "close" => app.exit(0),
             _ => {}
         })
-        .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::Click {
+        .on_tray_icon_event(|tray, event| match event {
+            // Double-click the tray anchor: bring Doty back to the center of the
+            // screen after it has wandered or been dragged off-view.
+            TrayIconEvent::DoubleClick {
+                button: MouseButton::Left,
+                ..
+            } => center_main(tray.app_handle()),
+            TrayIconEvent::Click {
                 button: MouseButton::Left,
                 button_state: MouseButtonState::Up,
                 ..
-            } = event
-            {
-                show_main(tray.app_handle());
-            }
+            } => show_main(tray.app_handle()),
+            _ => {}
         })
         .build(app)?;
 
