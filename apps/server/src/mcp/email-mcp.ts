@@ -42,8 +42,8 @@ const TOOLS = [
     description:
       'List recent messages from a connected mailbox, newest first. Returns summaries only ' +
       '(subject, from, date, snippet, ids) — call email_read for the body. ' +
-      'query uses the provider search syntax (Gmail: is:unread, from:x, newer_than:2d; ' +
-      'Microsoft Graph: plain-text search). ' +
+      'query uses the provider search syntax (Gmail: is:unread, from:x; Microsoft Graph: plain-text search). ' +
+      'since/until bound by received date ("yesterday" + "today" = messages received yesterday). ' +
       UNTRUSTED_NOTE,
     inputSchema: {
       type: 'object',
@@ -51,6 +51,8 @@ const TOOLS = [
         account: { type: 'string', description: 'Account email or id from email_accounts; omit only if a single mailbox is connected.' },
         provider: { type: 'string', enum: ['google', 'microsoft'], description: 'Restrict to a provider; fails if it has several accounts.' },
         query: { type: 'string', description: 'Optional provider-side search query.' },
+        since: { type: 'string', description: 'Inclusive start: "yesterday", "today", "2026-10-05" or an ISO date-time.' },
+        until: { type: 'string', description: 'Exclusive end: "today" means through the start of today.' },
         limit: { type: 'integer', minimum: 1, maximum: 25, description: 'How many messages (default 10, max 25).' },
       },
       additionalProperties: false,
@@ -73,6 +75,42 @@ const TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: 'schedule_daily',
+    description:
+      'Create a daily routine for the user. Every day at `time` (24h HH:MM, server-local, default ' +
+      'America/Mexico_City) Doty will execute `prompt` as a complete instruction; the result lands in the ' +
+      "Doty chat and is also sent as a Discord DM unless deliver='doty'. Use this whenever the user asks " +
+      'for something recurring ("envíame el resumen de mis correos todos los días a las 6 am", "cada mañana a ' +
+      'las 8"). Write `prompt` as a self-contained instruction (relative dates like "ayer" are resolved when ' +
+      'it runs). Confirm time and content with the user before creating it, and tell them the next run time.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        time: { type: 'string', description: 'Daily wall-clock time, 24h HH:MM (e.g. "06:00").' },
+        prompt: { type: 'string', description: 'Complete instruction to execute every day, in the user\'s language.' },
+        deliver: { type: 'string', enum: ['both', 'doty'], description: '"both" (default): Doty chat + Discord DM; "doty": chat only.' },
+        time_zone: { type: 'string', description: 'Optional IANA zone (e.g. "America/Mexico_City"); defaults to the server zone.' },
+      },
+      required: ['time', 'prompt'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'schedule_list',
+    description: 'List the active daily routines with their id, time, zone and next occurrence (epoch ms). No arguments.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'schedule_cancel',
+    description: 'Cancel a daily routine by id (or unique id prefix) from schedule_list. Returns the removed routine id.',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string', description: 'Routine id from schedule_list.' } },
+      required: ['id'],
+      additionalProperties: false,
+    },
+  },
 ] as const;
 
 interface JsonRpcMessage {
@@ -82,9 +120,14 @@ interface JsonRpcMessage {
   params?: unknown;
 }
 
-async function callApi(path: string): Promise<unknown> {
+async function callApi(path: string, init: { method?: string; body?: unknown } = {}): Promise<unknown> {
   const response = await fetch(`${BASE_URL}${path}`, {
-    headers: TOKEN ? { authorization: `Bearer ${TOKEN}` } : {},
+    method: init.method ?? 'GET',
+    headers: {
+      ...(TOKEN ? { authorization: `Bearer ${TOKEN}` } : {}),
+      ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}),
+    },
+    ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
   });
   const text = await response.text();
   let body: unknown;
@@ -119,6 +162,8 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
     if (provider) params.set('provider', provider);
     if (typeof args.account === 'string' && args.account.trim()) params.set('account', args.account.trim());
     if (typeof args.query === 'string' && args.query.trim()) params.set('query', args.query.trim());
+    if (typeof args.since === 'string' && args.since.trim()) params.set('since', args.since.trim());
+    if (typeof args.until === 'string' && args.until.trim()) params.set('until', args.until.trim());
     const limit =
       typeof args.limit === 'number' && Number.isFinite(args.limit)
         ? Math.min(25, Math.max(1, Math.trunc(args.limit)))
@@ -133,6 +178,27 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
     if (provider) params.set('provider', provider);
     if (typeof args.account === 'string' && args.account.trim()) params.set('account', args.account.trim());
     return callApi(`/email/read?${params.toString()}`);
+  }
+
+  if (name === 'schedule_daily') {
+    return callApi('/schedules', {
+      method: 'POST',
+      body: {
+        time: requireString(args.time, 'time'),
+        prompt: requireString(args.prompt, 'prompt'),
+        ...(typeof args.deliver === 'string' ? { deliver: args.deliver } : {}),
+        ...(typeof args.time_zone === 'string' && args.time_zone.trim()
+          ? { timeZone: args.time_zone.trim() }
+          : {}),
+      },
+    });
+  }
+
+  if (name === 'schedule_list') return callApi('/schedules');
+
+  if (name === 'schedule_cancel') {
+    const id = requireString(args.id, 'id');
+    return callApi(`/schedules/${encodeURIComponent(id)}`, { method: 'DELETE' });
   }
 
   throw new Error(`Unknown tool: ${name}`);

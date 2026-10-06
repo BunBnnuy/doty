@@ -25,7 +25,9 @@ import { classifyVoiceIntent, classifyVoiceIntentJev, JEV_DEFAULT_MODEL, JEV_DEF
 import { OpenCodeClient, parseOpenCodeModel } from './integrations/opencode.js';
 import { OpenCodeAgent, DESKTOP_SESSION_KEY } from './agent/opencode-agent.js';
 import { SessionStore } from './agent/sessions.js';
+import { ScheduleService } from './automations/schedules.js';
 import { createEmailServiceFromEnv } from './integrations/email/service.js';
+import { registerScheduleRoutes } from './routes/schedules.js';
 import type { AgentRunner } from './agent/runner.js';
 
 const PORT = Number.parseInt(process.env.PORT ?? '8787', 10);
@@ -217,9 +219,39 @@ async function main(): Promise<void> {
     app.log.warn('DISCORD_BOT_TOKEN is set but no agent backend is configured; Discord is disabled');
   }
 
+  // Conversational schedules ("envíame el resumen de correos todos los días a
+  // las 6 am"). The agent creates them through its MCP tools; firing runs the
+  // stored prompt through the same agent, so the result lands in the Doty chat
+  // (run events) plus a Discord DM when configured.
+  let schedules: ScheduleService | undefined;
+  if (runtime) {
+    const discordUserId = resolveDiscordUserId(process.env);
+    const discordBot = discord;
+    const deliverDiscord = discordBot && discordUserId
+      ? async (text: string): Promise<void> => {
+          const channelId = await discordBot.dmChannel(discordUserId);
+          if (!channelId) throw new Error('could not open the Discord DM channel');
+          await discordBot.send(channelId, text);
+        }
+      : undefined;
+    if (!deliverDiscord) {
+      app.log.warn('schedules: Discord delivery unavailable (set DOTY_DISCORD_USER_ID or a shared/allowed Discord user id)');
+    }
+    schedules = new ScheduleService({
+      log: eventLog,
+      run: (prompt, key) => runtime.run(prompt, key),
+      ...(deliverDiscord ? { deliverDiscord } : {}),
+      logger: (message) => app.log.info(message),
+    });
+    registerScheduleRoutes(app, schedules);
+    schedules.hydrate();
+    app.log.info(`schedules: ${schedules.list().length} active (tz ${timeZone})`);
+  }
+
   const shutdown = async (signal: string): Promise<void> => {
     app.log.info({ signal }, 'shutting down');
     reminders?.stop();
+    schedules?.stop();
     voice?.destroy();
     discord?.stop();
     await app.close();
@@ -243,4 +275,15 @@ if (invokedPath && import.meta.url === pathToFileURL(invokedPath).href) {
     console.error(error);
     process.exit(1);
   });
+}
+
+/** Discord user that receives scheduled DMs: explicit env, else the first shared/allowed id. */
+function resolveDiscordUserId(env: NodeJS.ProcessEnv): string | undefined {
+  const explicit = env.DOTY_DISCORD_USER_ID?.trim();
+  if (explicit) return explicit;
+  for (const raw of [env.DOTY_SHARED_SESSION_USER_IDS, env.DISCORD_ALLOWED_USER_IDS]) {
+    const first = raw?.split(',')[0]?.trim();
+    if (first) return first;
+  }
+  return undefined;
 }

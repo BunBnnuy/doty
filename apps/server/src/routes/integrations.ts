@@ -32,6 +32,7 @@ import {
   type EmailSummary,
   type IntegrationOverview,
 } from '../integrations/email/types.js';
+import { parseDateBound, resolveTimeZone } from '../time.js';
 
 /** Structural contract so routes stay testable without a real service. */
 export interface IntegrationRoutesService {
@@ -59,6 +60,9 @@ const listQuerySchema = z.object({
   provider: z.string().optional(),
   account: z.string().min(1).max(320).optional(),
   query: z.string().max(500).optional(),
+  /** `yesterday`, `today`, `YYYY-MM-DD` or an ISO date-time. */
+  since: z.string().min(1).max(40).optional(),
+  until: z.string().min(1).max(40).optional(),
   limit: z.coerce.number().int().min(1).max(25).optional(),
 });
 
@@ -151,11 +155,24 @@ export function registerIntegrationRoutes(
     if (!parsed.success) return reply.code(400).send({ error: 'invalid_query' });
     const selector = readSelector(reply, parsed.data.provider, parsed.data.account);
     if (selector === INVALID) return;
+    const timeZone = resolveTimeZone(process.env.DOTY_TZ);
+    let since: number | undefined;
+    let until: number | undefined;
+    if (parsed.data.since !== undefined) {
+      since = parseDateBound(parsed.data.since, timeZone);
+      if (since === undefined) return reply.code(400).send({ error: 'invalid_since' });
+    }
+    if (parsed.data.until !== undefined) {
+      until = parseDateBound(parsed.data.until, timeZone);
+      if (until === undefined) return reply.code(400).send({ error: 'invalid_until' });
+    }
     try {
       return {
         messages: await service.list(selector, {
           ...(parsed.data.query ? { query: parsed.data.query } : {}),
           limit: parsed.data.limit ?? 10,
+          ...(since !== undefined ? { since } : {}),
+          ...(until !== undefined ? { until } : {}),
         }),
       };
     } catch (error) {

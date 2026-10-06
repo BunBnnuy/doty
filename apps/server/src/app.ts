@@ -52,6 +52,8 @@ const GUARDED_ROUTES = new Set([
   '/integrations/:target',
   '/email/list',
   '/email/read',
+  '/schedules',
+  '/schedules/:id',
 ]);
 
 export function buildApp(options: BuildAppOptions = {}): BuiltApp {

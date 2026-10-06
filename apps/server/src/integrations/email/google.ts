@@ -140,8 +140,14 @@ export class GmailClient implements EmailClient {
 
   async list(options: EmailListOptions): Promise<EmailSummary[]> {
     const params = new URLSearchParams({ maxResults: String(options.limit) });
+    const terms: string[] = [];
     const query = options.query?.trim();
-    if (query) params.set('q', query);
+    if (query) terms.push(query);
+    // Gmail search accepts epoch seconds for date bounds, so callers can pass
+    // exact bounds (for example "yesterday" resolved in the server's zone).
+    if (options.since !== undefined) terms.push(`after:${Math.floor(options.since / 1000)}`);
+    if (options.until !== undefined) terms.push(`before:${Math.floor(options.until / 1000)}`);
+    if (terms.length > 0) params.set('q', terms.join(' '));
     const response = await this.fetchImpl(`${GMAIL_API}/messages?${params.toString()}`, {
       headers: this.#headers(),
     });

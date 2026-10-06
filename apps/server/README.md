@@ -35,6 +35,10 @@ in your shell (or your existing local dotenv configuration; never commit secrets
 - `MICROSOFT_CLIENT_ID` / `MICROSOFT_CLIENT_SECRET` / `MICROSOFT_TENANT_ID`:
   Entra app registration (`Mail.Read`, `User.Read`, `offline_access`); the
   tenant defaults to `common`.
+- `DOTY_TZ`: IANA zone for schedules and reminders (default
+  `America/Mexico_City`).
+- `DOTY_DISCORD_USER_ID`: Discord user that receives scheduled DMs; falls back
+  to the first id in `DOTY_SHARED_SESSION_USER_IDS` / `DISCORD_ALLOWED_USER_IDS`.
 
 Without `DOTY_TOKEN`, bearer authentication is disabled for local development and
 the server logs a prominent warning. **Do not expose that mode publicly.** When
@@ -110,14 +114,14 @@ GET    /email/read?account=&provider=&id=              → one plain-text body (
   the callback is the only public route and only accepts a valid `state`.
 
 OpenCode (the production agent backend) gets these tools through the stdio MCP
-server in `src/mcp/email-mcp.ts`. It proxies to the guarded HTTP routes with
-`DOTY_TOKEN`, so the shim never sees mailbox tokens. Example OpenCode config
-(`~/.config/opencode/opencode.jsonc`):
+server in `src/mcp/email-mcp.ts` (email + schedule tools below). It proxies to
+the guarded HTTP routes with `DOTY_TOKEN`, so the shim never sees mailbox
+tokens. Example OpenCode config (`~/.config/opencode/opencode.jsonc`):
 
 ```jsonc
 {
   "mcp": {
-    "doty-email": {
+    "doty": {
       "type": "local",
       "command": [
         "/home/ubuntu/doty/node_modules/.bin/tsx",
@@ -129,6 +133,31 @@ server in `src/mcp/email-mcp.ts`. It proxies to the guarded HTTP routes with
   }
 }
 ```
+
+## Schedules (conversational automations)
+
+Routines are created by talking to the agent, not in code: the user asks
+"envíame el resumen de mis correos todos los días a las 6 am" and the agent
+calls `schedule_daily` with a self-contained prompt (for example, "resume los
+correos recibidos ayer de todas las cuentas y redáctalo en español"). Firing
+runs that prompt through the same agent; the reply lands in the Doty chat (run
+events) and goes out as a Discord DM unless `deliver: "doty"`.
+
+```text
+GET    /schedules        → active routines + next occurrence (bearer)
+POST   /schedules        → { prompt, time: "HH:MM", deliver?, timeZone? } (bearer)
+DELETE /schedules/:id    → cancel (bearer)
+```
+
+- MCP tools: `schedule_daily`, `schedule_list`, `schedule_cancel`.
+- Event-sourced like reminders (`schedule_created` / `schedule_cancelled` /
+  `schedule_fired`), so restarts rebuild the active set; a routine fires at
+  most once per local day (`DOTY_TZ`).
+- `email_list` accepts `since`/`until` (`yesterday`, `today`, `YYYY-MM-DD` or an
+  ISO date-time) so date-bounded summaries are exact across providers.
+- Discord delivery requires a target user: `DOTY_DISCORD_USER_ID`, falling back
+  to the first id in `DOTY_SHARED_SESSION_USER_IDS` / `DISCORD_ALLOWED_USER_IDS`;
+  without Discord the routine still lands in the Doty chat.
 
 ## Offline verification
 

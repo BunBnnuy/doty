@@ -38,6 +38,10 @@ export interface EmailMessage extends EmailSummary {
 export interface EmailListOptions {
   query?: string;
   limit: number;
+  /** Inclusive lower bound on the received date, epoch ms. */
+  since?: number;
+  /** Exclusive upper bound on the received date, epoch ms. */
+  until?: number;
 }
 
 export interface EmailClient {

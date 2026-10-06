@@ -118,6 +118,17 @@ describe('GmailClient', () => {
     const message = await client.read('m1');
     expect(message.body).toContain('Cuerpo en texto');
   });
+
+  it('bounds results with since/until as Gmail epoch terms', async () => {
+    const fakeFetch = vi.fn<typeof fetch>(async () => json({ messages: [] }));
+    const client = new GmailClient('token', fakeFetch);
+    const since = Date.UTC(2026, 9, 5, 6, 0);
+    const until = Date.UTC(2026, 9, 6, 6, 0);
+    await client.list({ limit: 5, since, until });
+    const url = String(fakeFetch.mock.calls[0]?.[0]);
+    expect(url).toContain(`after%3A${since / 1000}`);
+    expect(url).toContain(`before%3A${until / 1000}`);
+  });
 });
 
 describe('GraphClient', () => {

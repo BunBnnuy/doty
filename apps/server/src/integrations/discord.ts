@@ -53,6 +53,8 @@ export interface DiscordBotOptions {
 export interface DiscordBot {
   /** Post a message to a channel unprompted (e.g. a scheduled reminder). */
   send(channelId: string, content: string): Promise<void>;
+  /** Open (or reuse) the DM channel with a user; `undefined` when it fails. */
+  dmChannel(userId: string): Promise<string | undefined>;
   stop(): void;
 }
 
@@ -223,6 +225,25 @@ export function startDiscordBot(options: DiscordBotOptions): DiscordBot {
       await fetch(`${API_BASE}/channels/${channelId}/typing`, { method: 'POST', headers: authHeaders });
     } catch {
       // Typing is best-effort.
+    }
+  }
+
+  async function openDm(userId: string): Promise<string | undefined> {
+    try {
+      const response = await fetch(`${API_BASE}/users/@me/channels`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({ recipient_id: userId }),
+      });
+      if (!response.ok) {
+        log(`discord: could not open DM (${response.status})`);
+        return undefined;
+      }
+      const body = (await response.json()) as { id?: unknown };
+      return typeof body.id === 'string' ? body.id : undefined;
+    } catch (error) {
+      log(`discord: DM request errored (${error instanceof Error ? error.name : 'unknown'})`);
+      return undefined;
     }
   }
 
@@ -398,6 +419,7 @@ export function startDiscordBot(options: DiscordBotOptions): DiscordBot {
 
   return {
     send: sendMessage,
+    dmChannel: openDm,
     stop() {
       stopped = true;
       stopHeartbeat();

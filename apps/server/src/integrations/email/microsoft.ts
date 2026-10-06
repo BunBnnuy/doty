@@ -149,6 +149,14 @@ export class GraphClient implements EmailClient {
 
   async list(options: EmailListOptions): Promise<EmailSummary[]> {
     const params = new URLSearchParams({ $select: LIST_SELECT, $top: String(options.limit) });
+    const filters: string[] = [];
+    if (options.since !== undefined) {
+      filters.push(`receivedDateTime ge ${new Date(options.since).toISOString()}`);
+    }
+    if (options.until !== undefined) {
+      filters.push(`receivedDateTime lt ${new Date(options.until).toISOString()}`);
+    }
+    if (filters.length > 0) params.set('$filter', filters.join(' and '));
     const query = options.query?.trim();
     if (query) params.set('$search', `"${query.replace(/"/g, ' ')}"`);
     else params.set('$orderby', 'receivedDateTime desc');
