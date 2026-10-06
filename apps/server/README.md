@@ -23,6 +23,9 @@ in your shell (or your existing local dotenv configuration; never commit secrets
 - `DISCORD_CHANNEL_ID`: optional; restrict guild replies to this one channel.
 - `DISCORD_TRIGGER_WORDS`: comma-separated words that trigger a reply (default
   `doty,bot`).
+- `DOTY_SHARED_SESSION_USER_IDS`: comma-separated Discord user ids whose DMs
+  continue the desktop (`desktop`) session instead of a per-user one, so the
+  same conversation history is shared across clients.
 
 Without `DOTY_TOKEN`, bearer authentication is disabled for local development and
 the server logs a prominent warning. **Do not expose that mode publicly.** When
@@ -143,7 +146,9 @@ gets its own OpenCode session — one per DM user (`discord:dm:<userId>`), one p
 guild (`discord:guild:<guildId>`), and one for the desktop (`desktop`) — and Doty
 only stores the session id (as `conversation_session` events). The history lives
 in OpenCode and is continued by posting to that session, so it survives restarts
-without Doty re-sending past turns.
+without Doty re-sending past turns. DMs from users listed in
+`DOTY_SHARED_SESSION_USER_IDS` reuse the desktop session instead, so Discord and
+the desktop client keep one shared memory.
 
 **Music (voice).** In a server, Doty can join your voice channel and play YouTube
 audio: `doty play <url|search>`, `doty skip`, `doty stop` (leave), `doty pause`,

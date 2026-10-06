@@ -139,6 +139,19 @@ export function parseTriggerWords(raw: string | undefined): string[] {
   return words.length > 0 ? words : [...DEFAULT_TRIGGER_WORDS];
 }
 
+/**
+ * Conversation key an incoming message runs under. A DM from a user in
+ * `sharedUserIds` continues the desktop session (`desktopKey`) instead of its
+ * own, so Discord and the desktop client share one history.
+ */
+export function resolveConversationKey(
+  context: Pick<DiscordMessageContext, 'isDm' | 'userId' | 'conversationKey'>,
+  sharedUserIds: ReadonlySet<string>,
+  desktopKey: string,
+): string {
+  return context.isDm && sharedUserIds.has(context.userId) ? desktopKey : context.conversationKey;
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)

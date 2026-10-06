@@ -14,7 +14,8 @@ import type { AgentRunResult } from './loop.js';
 import type { AgentRunner } from './runner.js';
 import type { SessionStore } from './sessions.js';
 
-const DESKTOP_KEY = 'desktop';
+/** Conversation key the desktop client runs under. */
+export const DESKTOP_SESSION_KEY = 'desktop';
 
 export class OpenCodeAgent implements AgentRunner {
   readonly #creating = new Map<string, Promise<string>>();
@@ -27,11 +28,11 @@ export class OpenCodeAgent implements AgentRunner {
 
   start(task: string): string {
     const runId = randomUUID();
-    void this.execute(task, DESKTOP_KEY, runId);
+    void this.execute(task, DESKTOP_SESSION_KEY, runId);
     return runId;
   }
 
-  run(task: string, conversationKey = DESKTOP_KEY): Promise<AgentRunResult> {
+  run(task: string, conversationKey = DESKTOP_SESSION_KEY): Promise<AgentRunResult> {
     return this.execute(task, conversationKey, randomUUID());
   }
 

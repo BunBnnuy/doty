@@ -18,12 +18,12 @@ import { InMemoryEventLog } from './events/log.js';
 import { OpenAIChatProvider, openAIConfigFromEnv } from './provider/openai.js';
 import { PgEventLog } from './events/pg-log.js';
 import { AgentMemory, OpenAIEmbedder, embeddingConfigFromEnv, memoryStoreFromEnv } from './memory/index.js';
-import { parseAllowedUserIds, parseTriggerWords, startDiscordBot, type DiscordBot } from './integrations/discord.js';
+import { parseAllowedUserIds, parseTriggerWords, resolveConversationKey, startDiscordBot, type DiscordBot } from './integrations/discord.js';
 import { extractCommandArg, parseVoiceCommand, VoiceManager } from './integrations/voice.js';
 import { handleReminderMessage, ReminderService, resolveTimeZone } from './integrations/reminders.js';
 import { classifyVoiceIntent, classifyVoiceIntentJev, JEV_DEFAULT_MODEL, JEV_DEFAULT_URL, type ClassifierConfig, type JevConfig } from './integrations/command-classifier.js';
 import { OpenCodeClient, parseOpenCodeModel } from './integrations/opencode.js';
-import { OpenCodeAgent } from './agent/opencode-agent.js';
+import { OpenCodeAgent, DESKTOP_SESSION_KEY } from './agent/opencode-agent.js';
 import { SessionStore } from './agent/sessions.js';
 import type { AgentRunner } from './agent/runner.js';
 
@@ -90,6 +90,10 @@ async function main(): Promise<void> {
       app.log.warn('DISCORD_ALLOWED_USER_IDS is unset: Doty will answer any Discord user');
     }
     const triggerWords = parseTriggerWords(process.env.DISCORD_TRIGGER_WORDS);
+    // DMs from these users continue the desktop session, so Discord and the
+    // desktop client share one OpenCode history. Same comma-separated format as
+    // DISCORD_ALLOWED_USER_IDS.
+    const sharedSessionUserIds = parseAllowedUserIds(process.env.DOTY_SHARED_SESSION_USER_IDS);
     const commandModel = process.env.COMMAND_MODEL?.trim() || process.env.OPENAI_MODEL?.trim();
     const classifier: ClassifierConfig | undefined = commandModel && process.env.OPENAI_BASE_URL?.trim()
       ? {
@@ -184,8 +188,9 @@ async function main(): Promise<void> {
         }
       },
       handle: async (text, context) => {
+        const key = resolveConversationKey(context, sharedSessionUserIds, DESKTOP_SESSION_KEY);
         eventLog.append({ type: 'message', data: { text } });
-        const result = await runtime.run(text, context.conversationKey);
+        const result = await runtime.run(text, key);
         const reply = result.answer ?? result.error ?? `No pude completar la tarea (${result.status}).`;
         if (context.guildId && voice?.connected(context.guildId)) {
           void voice.speak(context.guildId, reply);

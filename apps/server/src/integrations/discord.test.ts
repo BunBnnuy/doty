@@ -4,6 +4,7 @@ import {
   discordIntents,
   parseAllowedUserIds,
   parseTriggerWords,
+  resolveConversationKey,
   shouldRespondToMessage,
   stripBotMention,
   type IncomingMessage,
@@ -65,5 +66,21 @@ describe('discord helpers', () => {
     // Custom trigger words.
     expect(shouldRespondToMessage(msg({ guildId: 'g1', content: 'ping' }), { allowedUserIds: allowed, triggerWords: ['ping'] })).toBe(true);
     expect(shouldRespondToMessage(msg({ guildId: 'g1', content: 'ping' }), { allowedUserIds: allowed, triggerWords: ['doty'] })).toBe(false);
+  });
+});
+
+describe('shared conversations', () => {
+  const shared = new Set(['u1']);
+  const dm = { isDm: true, userId: 'u1', conversationKey: 'discord:dm:u1' };
+
+  it('routes a shared user DM to the desktop session', () => {
+    expect(resolveConversationKey(dm, shared, 'desktop')).toBe('desktop');
+  });
+
+  it('keeps unlisted users and guilds on their own session', () => {
+    expect(resolveConversationKey({ ...dm, userId: 'u2' }, shared, 'desktop')).toBe('discord:dm:u1');
+    expect(resolveConversationKey({ isDm: false, userId: 'u1', conversationKey: 'discord:guild:g1' }, shared, 'desktop'))
+      .toBe('discord:guild:g1');
+    expect(resolveConversationKey(dm, new Set(), 'desktop')).toBe('discord:dm:u1');
   });
 });
