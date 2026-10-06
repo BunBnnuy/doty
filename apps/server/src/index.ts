@@ -19,6 +19,7 @@ import { OpenAIChatProvider, openAIConfigFromEnv } from './provider/openai.js';
 import { PgEventLog } from './events/pg-log.js';
 import { AgentMemory, OpenAIEmbedder, embeddingConfigFromEnv, memoryStoreFromEnv } from './memory/index.js';
 import { parseAllowedUserIds, parseTriggerWords, startDiscordBot, type DiscordBot } from './integrations/discord.js';
+import { parseVoiceCommand, VoiceManager } from './integrations/voice.js';
 import { OpenCodeClient, parseOpenCodeModel } from './integrations/opencode.js';
 import { OpenCodeAgent } from './agent/opencode-agent.js';
 import { SessionStore } from './agent/sessions.js';
@@ -77,17 +78,41 @@ async function main(): Promise<void> {
 
   // Optional Discord integration: receive messages and reply with the agent.
   let discord: DiscordBot | undefined;
+  let voice: VoiceManager | undefined;
   const discordToken = process.env.DISCORD_BOT_TOKEN?.trim();
   if (discordToken && runtime) {
     const allowed = parseAllowedUserIds(process.env.DISCORD_ALLOWED_USER_IDS);
     if (allowed.size === 0) {
       app.log.warn('DISCORD_ALLOWED_USER_IDS is unset: Doty will answer any Discord user');
     }
+    const triggerWords = parseTriggerWords(process.env.DISCORD_TRIGGER_WORDS);
+    voice = new VoiceManager({ log: (message) => app.log.info(message) });
     discord = startDiscordBot({
       token: discordToken,
       allowedUserIds: allowed,
       ...(process.env.DISCORD_CHANNEL_ID?.trim() ? { channelId: process.env.DISCORD_CHANNEL_ID.trim() } : {}),
-      triggerWords: parseTriggerWords(process.env.DISCORD_TRIGGER_WORDS),
+      triggerWords,
+      onGatewayOpen: (send) => voice?.setGatewaySender(send),
+      onVoiceStateUpdate: (data) => voice?.onVoiceStateUpdate(data),
+      onVoiceServerUpdate: (data) => voice?.onVoiceServerUpdate(data),
+      onCommand: (text, context) => {
+        const command = parseVoiceCommand(text, triggerWords);
+        if (!command) return undefined;
+        if (!context.guildId) return 'La música solo funciona en servidores (no en DM).';
+        const channelId = voice?.channelOf(context.guildId, context.userId) ?? null;
+        if (command.cmd === 'play') {
+          if (!channelId) return 'Entra a un canal de voz primero y luego pídeme la música.';
+          return voice?.play(context.guildId, channelId, command.arg ?? '');
+        }
+        switch (command.cmd) {
+          case 'skip': return voice?.skip(context.guildId);
+          case 'stop': return voice?.stop(context.guildId);
+          case 'pause': return voice?.pause(context.guildId);
+          case 'resume': return voice?.resume(context.guildId);
+          case 'queue': return voice?.queue(context.guildId);
+          default: return undefined;
+        }
+      },
       handle: async (text, context) => {
         eventLog.append({ type: 'message', data: { text } });
         const result = await runtime.run(text, context.conversationKey);
@@ -102,6 +127,7 @@ async function main(): Promise<void> {
 
   const shutdown = async (signal: string): Promise<void> => {
     app.log.info({ signal }, 'shutting down');
+    voice?.destroy();
     discord?.stop();
     await app.close();
     if (pgLog) await pgLog.close();

@@ -144,3 +144,9 @@ guild (`discord:guild:<guildId>`), and one for the desktop (`desktop`) — and D
 only stores the session id (as `conversation_session` events). The history lives
 in OpenCode and is continued by posting to that session, so it survives restarts
 without Doty re-sending past turns.
+
+**Music (voice).** In a server, Doty can join your voice channel and play YouTube
+audio: `doty play <url|search>`, `doty skip`, `doty stop` (leave), `doty pause`,
+`doty resume`, `doty queue`. Requires `yt-dlp` and `ffmpeg` on the host plus the
+`@discordjs/voice` + `libsodium-wrappers` + `opusscript` dependencies. It uses the
+`GUILD_VOICE_STATES` intent to find your channel.

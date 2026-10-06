@@ -17,6 +17,8 @@ export interface DiscordMessageContext {
   messageId: string;
   userId: string;
   isDm: boolean;
+  /** Guild id for server messages (absent for DMs). */
+  guildId?: string;
   /** Memory scope: per DM user, or per guild (server). */
   conversationKey: string;
 }
@@ -33,6 +35,17 @@ export interface DiscordBotOptions {
   messageContent?: boolean;
   /** Produce the reply text for an incoming message (runs the agent). */
   handle: (text: string, context: DiscordMessageContext) => Promise<string | undefined>;
+  /**
+   * Optional command hook (music, etc.). Return a string to reply and skip the
+   * agent, or `undefined` to let the agent handle the message.
+   */
+  onCommand?: (text: string, context: DiscordMessageContext) => Promise<string | undefined> | string | undefined;
+  /** Receives the raw gateway sender once the socket is open (for voice). */
+  onGatewayOpen?: (send: (payload: unknown) => boolean) => void;
+  /** VOICE_STATE_UPDATE dispatch payload. */
+  onVoiceStateUpdate?: (data: unknown) => void;
+  /** VOICE_SERVER_UPDATE dispatch payload. */
+  onVoiceServerUpdate?: (data: unknown) => void;
   /** Metadata-only logger; never pass message content. */
   log?: (message: string) => void;
 }
@@ -43,8 +56,8 @@ export interface DiscordBot {
 
 const GATEWAY_URL = 'wss://gateway.discord.gg/?v=10&encoding=json';
 const API_BASE = 'https://discord.com/api/v10';
-// GUILD_MESSAGES | DIRECT_MESSAGES
-const BASE_INTENTS = (1 << 9) | (1 << 12);
+// GUILD_VOICE_STATES | GUILD_MESSAGES | DIRECT_MESSAGES
+const BASE_INTENTS = (1 << 7) | (1 << 9) | (1 << 12);
 // MESSAGE_CONTENT is privileged and must be enabled in the developer portal.
 const MESSAGE_CONTENT_INTENT = 1 << 15;
 const USER_AGENT = 'Doty (https://github.com/BunBnnuy/doty, 0.1)';
@@ -200,18 +213,27 @@ export function startDiscordBot(options: DiscordBotOptions): DiscordBot {
 
   async function respond(message: IncomingMessage, text: string): Promise<void> {
     log(`discord: message from ${message.authorId} (${message.guildId === undefined ? 'dm' : 'guild'})`);
+    const context: DiscordMessageContext = {
+      channelId: message.channelId,
+      messageId: message.messageId,
+      userId: message.authorId,
+      isDm: message.guildId === undefined,
+      conversationKey: message.guildId === undefined
+        ? `discord:dm:${message.authorId}`
+        : `discord:guild:${message.guildId}`,
+      ...(message.guildId !== undefined ? { guildId: message.guildId } : {}),
+    };
     void sendTyping(message.channelId);
     const typing = setInterval(() => void sendTyping(message.channelId), 8_000);
     try {
-      const reply = await options.handle(text, {
-        channelId: message.channelId,
-        messageId: message.messageId,
-        userId: message.authorId,
-        isDm: message.guildId === undefined,
-        conversationKey: message.guildId === undefined
-          ? `discord:dm:${message.authorId}`
-          : `discord:guild:${message.guildId}`,
-      });
+      if (options.onCommand) {
+        const handled = await options.onCommand(text, context);
+        if (handled !== undefined) {
+          if (handled.trim()) await sendMessage(message.channelId, handled.trim());
+          return;
+        }
+      }
+      const reply = await options.handle(text, context);
       if (reply && reply.trim()) await sendMessage(message.channelId, reply.trim());
     } catch (error) {
       log(`discord: handler errored (${error instanceof Error ? error.name : 'unknown'})`);
@@ -227,6 +249,14 @@ export function startDiscordBot(options: DiscordBotOptions): DiscordBot {
       if (typeof user?.id === 'string') botUserId = user.id;
       reconnectDelay = 1_000;
       log(`discord: ready as ${typeof user?.username === 'string' ? user.username : 'bot'}`);
+      return;
+    }
+    if (event === 'VOICE_STATE_UPDATE') {
+      options.onVoiceStateUpdate?.(data);
+      return;
+    }
+    if (event === 'VOICE_SERVER_UPDATE') {
+      options.onVoiceServerUpdate?.(data);
       return;
     }
     if (event !== 'MESSAGE_CREATE') return;
@@ -324,6 +354,12 @@ export function startDiscordBot(options: DiscordBotOptions): DiscordBot {
     socket = ws;
     ws.addEventListener('open', () => {
       log('discord: gateway socket open');
+      options.onGatewayOpen?.((payload) => {
+        const current = socket;
+        if (!current || current.readyState !== 1) return false;
+        current.send(JSON.stringify(payload));
+        return true;
+      });
     });
     ws.addEventListener('message', (event: MessageEvent) => {
       if (typeof event.data === 'string') onPayload(event.data);
