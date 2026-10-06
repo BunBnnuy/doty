@@ -1,0 +1,45 @@
+name: Deploy server
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+# One deploy at a time; never cancel a deploy mid-flight.
+concurrency:
+  group: deploy-kb
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build:contracts
+      - run: npm run typecheck
+      - run: npm test
+
+  deploy:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install deploy key
+        env:
+          KB_SSH_KEY: ${{ secrets.KB_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$KB_SSH_KEY" > ~/.ssh/kb_deploy
+          chmod 600 ~/.ssh/kb_deploy
+      - name: Deploy to kb
+        env:
+          KB_HOST: ${{ secrets.KB_HOST }}
+          KB_USER: ${{ secrets.KB_USER }}
+        run: |
+          ssh -i ~/.ssh/kb_deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new "$KB_USER@$KB_HOST" 'bash -s' < .github/scripts/deploy-kb.sh
