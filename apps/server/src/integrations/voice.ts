@@ -301,7 +301,10 @@ export class VoiceManager {
     const guild: GuildPlayer = { connection, player, speech, queue: [], channelId };
     this.#guilds.set(guildId, guild);
     connection.subscribe(player);
-    player.on(AudioPlayerStatus.Idle, () => void this.#next(guildId));
+    player.on(AudioPlayerStatus.Idle, () => {
+      this.#log('voice: player idle');
+      void this.#next(guildId);
+    });
     player.on('error', (error) => {
       this.#log(`voice: player error (${error.message.slice(0, 120)})`);
       void this.#next(guildId);
@@ -323,6 +326,7 @@ export class VoiceManager {
 
   #start(guild: GuildPlayer, query: string): void {
     guild.current = query;
+    this.#log(`voice: start (queue=${guild.queue.length})`);
     const mixer = new SpeechMixer();
     guild.mixer = mixer;
     const stream = createTrackStream(query, this.#track, (message) => this.#log(`voice: ${message}`));
@@ -335,10 +339,12 @@ export class VoiceManager {
     if (!guild) return;
     const next = guild.queue.shift();
     if (!next) {
+      this.#log('voice: queue empty, stopping');
       guild.current = undefined;
       guild.mixer = undefined;
       return;
     }
+    this.#log(`voice: next from queue (remaining=${guild.queue.length})`);
     this.#start(guild, next);
   }
 
@@ -351,6 +357,7 @@ export class VoiceManager {
   async play(guildId: string, channelId: string, query: string): Promise<string> {
     if (!query.trim()) return 'Dime qué reproduzco: `doty play <url o búsqueda>`.';
     const guild = await this.#ensure(guildId, channelId);
+    this.#log(`voice: play (current=${guild.current ? 'yes' : 'no'} queue=${guild.queue.length})`);
     if (guild.current) {
       guild.queue.push(query);
       return `Encolado (posición ${guild.queue.length}): ${query}`;
