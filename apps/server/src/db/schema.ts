@@ -192,6 +192,46 @@ export const approvals = pgTable('approvals', {
   decidedAt: timestamp('decided_at', { withTimezone: true }),
 });
 
+/**
+ * Connected third-party accounts (Gmail / Microsoft 365). One row per provider
+ * today (single-user instance); the shape leaves room for more accounts later.
+ */
+export const integrations = pgTable(
+  'integrations',
+  {
+    id: id(),
+    provider: text('provider').notNull(),
+    /** Account email address, shown in status responses. */
+    account: text('account'),
+    /** Space-separated scopes granted by the provider. */
+    scopes: text('scopes'),
+    status: text('status').notNull().default('connected'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [uniqueIndex('integrations_provider_unique').on(table.provider)],
+);
+
+/**
+ * Sealed OAuth secrets (AES-256-GCM, see `integrations/email/crypto.ts`).
+ * Ciphertext only: plaintext tokens never touch the database, logs or model
+ * context.
+ */
+export const credentials = pgTable(
+  'credentials',
+  {
+    id: id(),
+    integrationId: uuid('integration_id')
+      .notNull()
+      .references(() => integrations.id, { onDelete: 'cascade' }),
+    kind: text('kind').notNull().default('oauth_token'),
+    secret: text('secret').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [uniqueIndex('credentials_integration_unique').on(table.integrationId)],
+);
+
 // Row/insert types for the worker and routes.
 export type Dot = typeof dots.$inferSelect;
 export type NewDot = typeof dots.$inferInsert;
@@ -211,3 +251,7 @@ export type HarnessSession = typeof harnessSessions.$inferSelect;
 export type NewHarnessSession = typeof harnessSessions.$inferInsert;
 export type Approval = typeof approvals.$inferSelect;
 export type NewApproval = typeof approvals.$inferInsert;
+export type Integration = typeof integrations.$inferSelect;
+export type NewIntegration = typeof integrations.$inferInsert;
+export type Credential = typeof credentials.$inferSelect;
+export type NewCredential = typeof credentials.$inferInsert;

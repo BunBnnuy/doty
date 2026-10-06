@@ -15,6 +15,13 @@
       "when": 1791215205178,
       "tag": "0001_memory_vector",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791309900000,
+      "tag": "0002_integrations",
+      "breakpoints": true
     }
   ]
 }

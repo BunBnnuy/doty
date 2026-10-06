@@ -14,6 +14,7 @@ import { registerHealthRoutes } from './routes/health.js';
 import { registerMessageRoutes } from './routes/message.js';
 import { registerHarnessRoutes } from './routes/harness.js';
 import { registerLandingRoutes } from './routes/landing.js';
+import { registerIntegrationRoutes, type IntegrationRoutesService } from './routes/integrations.js';
 import { AgentRuntime, type AgentRuntimeOptions } from './agent/runtime.js';
 import type { AgentRunner } from './agent/runner.js';
 import { createHash, timingSafeEqual } from 'node:crypto';
@@ -29,6 +30,8 @@ export interface BuildAppOptions {
   runner?: AgentRunner;
   /** Shared bearer token. Defaults to DOTY_TOKEN; unset retains dev-only open mode. */
   token?: string;
+  /** Opt-in email integrations (Gmail / Microsoft 365) — routes only, no auth logic. */
+  email?: IntegrationRoutesService;
 }
 
 export interface BuiltApp {
@@ -39,7 +42,17 @@ export interface BuiltApp {
 }
 
 /** Routes that require the shared bearer token when DOTY_TOKEN is set. */
-const GUARDED_ROUTES = new Set(['/message', '/events', '/harness-message', '/harness-notice']);
+const GUARDED_ROUTES = new Set([
+  '/message',
+  '/events',
+  '/harness-message',
+  '/harness-notice',
+  '/integrations',
+  '/integrations/:provider/connect',
+  '/integrations/:provider',
+  '/email/list',
+  '/email/read',
+]);
 
 export function buildApp(options: BuildAppOptions = {}): BuiltApp {
   const log = options.log ?? new InMemoryEventLog();
@@ -66,6 +79,7 @@ export function buildApp(options: BuildAppOptions = {}): BuiltApp {
   registerLandingRoutes(app);
   registerEventRoutes(app, log);
   registerHarnessRoutes(app, log);
+  if (options.email) registerIntegrationRoutes(app, options.email, log);
   const runtime: AgentRunner | undefined = options.runner
     ?? (options.agent ? new AgentRuntime(options.agent, log) : undefined);
   registerMessageRoutes(app, log, runtime ? (text) => runtime.start(text) : undefined);

@@ -25,6 +25,7 @@ import { classifyVoiceIntent, classifyVoiceIntentJev, JEV_DEFAULT_MODEL, JEV_DEF
 import { OpenCodeClient, parseOpenCodeModel } from './integrations/opencode.js';
 import { OpenCodeAgent, DESKTOP_SESSION_KEY } from './agent/opencode-agent.js';
 import { SessionStore } from './agent/sessions.js';
+import { createEmailServiceFromEnv } from './integrations/email/service.js';
 import type { AgentRunner } from './agent/runner.js';
 
 const PORT = Number.parseInt(process.env.PORT ?? '8787', 10);
@@ -66,17 +67,27 @@ async function main(): Promise<void> {
     ? { provider: new OpenAIChatProvider(openAIConfigFromEnv()), ...(memory ? { memory } : {}) }
     : undefined;
 
+  // Optional email integrations (Gmail / Microsoft 365). Enabled when Postgres
+  // and DOTY_CRED_KEY exist; each provider additionally needs its OAuth app env.
+  const email = createEmailServiceFromEnv();
+
   const { app, runtime } = buildApp({
     logger: true,
     log: eventLog,
     ...(runner ? { runner } : {}),
     ...(agent ? { agent } : {}),
+    ...(email ? { email } : {}),
   });
 
   if (!process.env.DOTY_TOKEN?.trim()) {
     app.log.warn('DOTY_TOKEN is unset: API bearer authentication is DISABLED (development only)');
   }
   app.log.info(runner ? 'agent backend: opencode' : agent ? 'agent backend: openai' : 'agent backend: none');
+  app.log.info(
+    email
+      ? `email integrations: enabled (${email.configuredProviders().join(', ') || 'no providers configured'})`
+      : 'email integrations: disabled (requires DATABASE_URL + DOTY_CRED_KEY)',
+  );
 
   // Optional Discord integration: receive messages and reply with the agent.
   let discord: DiscordBot | undefined;
@@ -214,6 +225,7 @@ async function main(): Promise<void> {
     await app.close();
     if (pgLog) await pgLog.close();
     if (memoryStore) await memoryStore.close();
+    if (email) await email.close();
     process.exit(0);
   };
   process.once('SIGINT', () => void shutdown('SIGINT'));

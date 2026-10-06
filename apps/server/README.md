@@ -26,6 +26,15 @@ in your shell (or your existing local dotenv configuration; never commit secrets
 - `DOTY_SHARED_SESSION_USER_IDS`: comma-separated Discord user ids whose DMs
   continue the desktop (`desktop`) session instead of a per-user one, so the
   same conversation history is shared across clients.
+- `DOTY_CRED_KEY`: base64, 32 bytes. Encrypts OAuth tokens at rest; with
+  `DATABASE_URL` it enables the email integrations.
+- `DOTY_PUBLIC_URL`: public origin used to build OAuth redirect URIs (default
+  `https://doty.killbunny.top`).
+- `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`: Google OAuth web client with the
+  Gmail API enabled (`gmail.readonly`).
+- `MICROSOFT_CLIENT_ID` / `MICROSOFT_CLIENT_SECRET` / `MICROSOFT_TENANT_ID`:
+  Entra app registration (`Mail.Read`, `User.Read`, `offline_access`); the
+  tenant defaults to `common`.
 
 Without `DOTY_TOKEN`, bearer authentication is disabled for local development and
 the server logs a prominent warning. **Do not expose that mode publicly.** When
@@ -69,6 +78,53 @@ use a single server writer, and note that an abrupt process crash can lose write
 still in that queue. For deployment, enforce network egress restrictions: DNS
 preflight checks alone do **not** prevent DNS rebinding between validation and
 native fetch.
+
+## Email integrations (Gmail + Microsoft 365)
+
+Read-only mailbox access for the agent. Enabled when `DATABASE_URL` and
+`DOTY_CRED_KEY` are set; each provider is independent, so a missing client
+id/secret pair simply reports `configured: false` in status.
+
+```text
+POST   /integrations/:provider/connect    → { url }  (bearer; open in a browser)
+GET    /integrations/:provider/callback   → consent redirect target (public, state-signed)
+GET    /integrations                      → provider status (bearer)
+DELETE /integrations/:provider            → disconnect (bearer)
+GET    /email/list?provider=&query=&limit=10  → message summaries (bearer)
+GET    /email/read?provider=&id=              → one plain-text body (bearer)
+```
+
+- Tokens: refresh tokens are sealed with AES-256-GCM (`DOTY_CRED_KEY`) before
+  touching Postgres; access tokens live only in server memory. Microsoft
+  rotates refresh tokens on every refresh — the new value is always persisted.
+- Scopes: Gmail `gmail.readonly`; Microsoft `Mail.Read` + `User.Read` +
+  `offline_access`. Nothing here can send or modify mail.
+- Email bodies are **untrusted input**: they are data, never instructions. The
+  policy treatment lives in the tool descriptions (HTTP and MCP); no layer
+  executes requests found inside a message.
+- OAuth `state` is HMAC-signed under the same key and expires after 15 minutes;
+  the callback is the only public route and only accepts a valid `state`.
+
+OpenCode (the production agent backend) gets these tools through the stdio MCP
+server in `src/mcp/email-mcp.ts`. It proxies to the guarded HTTP routes with
+`DOTY_TOKEN`, so the shim never sees mailbox tokens. Example OpenCode config
+(`~/.config/opencode/opencode.jsonc`):
+
+```jsonc
+{
+  "mcp": {
+    "doty-email": {
+      "type": "local",
+      "command": [
+        "/home/ubuntu/doty/node_modules/.bin/tsx",
+        "/home/ubuntu/doty/apps/server/src/mcp/email-mcp.ts"
+      ],
+      "environment": { "DOTY_ENV_FILE": "/home/ubuntu/doty/.env" },
+      "enabled": true
+    }
+  }
+}
+```
 
 ## Offline verification
 
