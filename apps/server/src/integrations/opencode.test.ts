@@ -20,7 +20,7 @@ describe('opencode helpers', () => {
     expect(extractOpenCodeText([{ type: 'text', text: '   ' }])).toBe('');
   });
 
-  it('creates a session and posts a prompt', async () => {
+  it('creates a session and posts a prompt without interactive tools', async () => {
     const calls: Array<{ url: string; body: unknown }> = [];
     const fake: typeof fetch = async (input, init) => {
       const url = typeof input === 'string' ? input : String(input);
@@ -34,6 +34,24 @@ describe('opencode helpers', () => {
     expect(await client.createSession('t')).toBe('ses_1');
     expect(await client.prompt('ses_1', 'hola')).toBe('ok');
     expect(calls[0]?.body).toMatchObject({ model: { id: 'm', providerID: 'p' } });
-    expect(calls[1]?.body).toMatchObject({ parts: [{ type: 'text', text: 'hola' }] });
+    expect(calls[1]?.body).toMatchObject({
+      parts: [{ type: 'text', text: 'hola' }],
+      tools: { question: false },
+    });
+  });
+
+  it('aborts the session run when a prompt times out', async () => {
+    const paths: string[] = [];
+    const fake: typeof fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : String(input);
+      paths.push(new URL(url).pathname);
+      if (url.endsWith('/abort')) return new Response('true', { status: 200 });
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+      });
+    };
+    const client = new OpenCodeClient({ baseUrl: 'http://x', providerID: 'p', modelID: 'm', timeoutMs: 10 }, fake);
+    await expect(client.prompt('ses_1', 'hola')).rejects.toThrow(/timed out/);
+    expect(paths).toContain('/session/ses_1/abort');
   });
 });

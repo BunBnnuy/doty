@@ -8,7 +8,13 @@
  * Endpoints (OpenCode 1.18):
  *   POST /session                      -> create a session
  *   POST /session/{id}/message         -> prompt; returns the assistant message
+ *   POST /session/{id}/abort           -> stop the session's in-flight run
  *   GET  /session                      -> list sessions
+ *
+ * Headless runs must never block on interactive input. Every prompt disables
+ * the `question` tool (which waits for a human answer and would hang the turn
+ * forever) and carries a timeout that aborts the session's run, so a stuck run
+ * surfaces as an error instead of silence.
  */
 
 export interface OpenCodeConfig {
@@ -18,7 +24,13 @@ export interface OpenCodeConfig {
   modelID: string;
   /** Optional OpenCode agent (e.g. "build"). */
   agent?: string;
+  /** Abort a prompt that has not returned after this many ms (0 disables). */
+  timeoutMs?: number;
 }
+
+/** Interactive tools that wait for a human; disabled on headless runs. */
+const HEADLESS_TOOLS = { question: false } as const;
+const DEFAULT_TIMEOUT_MS = 10 * 60_000;
 
 /** Parse `provider/model` into its parts; defaults the provider. */
 export function parseOpenCodeModel(value: string): { providerID: string; modelID: string } {
@@ -69,19 +81,53 @@ export class OpenCodeClient {
     return body.id;
   }
 
+  /** Stop a session's in-flight run (best effort). */
+  async abort(sessionId: string): Promise<void> {
+    try {
+      await this.fetchImpl(this.url(`/session/${encodeURIComponent(sessionId)}/abort`), { method: 'POST' });
+    } catch {
+      // Best effort: callers are already handling a failure.
+    }
+  }
+
   /** Post one turn and return the assistant's text. */
   async prompt(sessionId: string, text: string, signal?: AbortSignal): Promise<string> {
-    const response = await this.fetchImpl(this.url(`/session/${encodeURIComponent(sessionId)}/message`), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        parts: [{ type: 'text', text }],
-        ...(this.config.agent ? { agent: this.config.agent } : {}),
-      }),
-      ...(signal ? { signal } : {}),
-    });
-    if (!response.ok) throw new Error(`OpenCode prompt HTTP ${response.status}`);
-    const body = (await response.json()) as { parts?: unknown };
-    return extractOpenCodeText(body.parts);
+    const timeoutMs = this.config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const controller = new AbortController();
+    const onAbort = (): void => controller.abort(signal?.reason);
+    if (signal) {
+      if (signal.aborted) controller.abort(signal.reason);
+      else signal.addEventListener('abort', onAbort, { once: true });
+    }
+    let timedOut = false;
+    const timer = timeoutMs > 0
+      ? setTimeout(() => {
+          timedOut = true;
+          controller.abort(new Error(`OpenCode prompt timed out after ${timeoutMs}ms`));
+        }, timeoutMs)
+      : undefined;
+    try {
+      const response = await this.fetchImpl(this.url(`/session/${encodeURIComponent(sessionId)}/message`), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          parts: [{ type: 'text', text }],
+          tools: HEADLESS_TOOLS,
+          ...(this.config.agent ? { agent: this.config.agent } : {}),
+        }),
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(`OpenCode prompt HTTP ${response.status}`);
+      const body = (await response.json()) as { parts?: unknown };
+      return extractOpenCodeText(body.parts);
+    } catch (error) {
+      // A run that never finishes keeps its session busy, so release it before
+      // surfacing the failure.
+      if (timedOut) await this.abort(sessionId);
+      throw error;
+    } finally {
+      if (timer) clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+    }
   }
 }
