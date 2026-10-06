@@ -118,8 +118,19 @@ export interface TrackOptions {
 }
 
 export function createTrackStream(query: string, options: TrackOptions = {}, onError?: (message: string) => void): Readable {
-  const target = /^https?:\/\//i.test(query) ? query : `${options.search ?? 'ytsearch1:'}${query}`;
-  const args = ['-f', 'bestaudio/best', '--no-playlist', '--no-warnings'];
+  // Users often paste URLs wrapped in <...>; strip those before URL detection.
+  const cleaned = query.trim().replace(/^<+/, '').replace(/>+$/, '').trim();
+  const target = /^https?:\/\//i.test(cleaned) ? cleaned : `${options.search ?? 'ytsearch1:'}${cleaned}`;
+  const args = [
+    '-f', 'bestaudio/best',
+    '--no-playlist',
+    '--no-warnings',
+    // YouTube n/sig challenges need a JS runtime + the EJS solver; mweb and
+    // web_embedded avoid the "The page needs to be reloaded" error more often.
+    '--js-runtimes', 'node',
+    '--remote-components', 'ejs:github',
+    '--extractor-args', 'youtube:player_client=mweb,web_embedded,default',
+  ];
   if (options.cookies) args.push('--cookies', options.cookies);
   if (options.extraArgs?.length) args.push(...options.extraArgs);
   args.push('-o', '-', target);
