@@ -11,8 +11,8 @@
 import { createCipheriv, createDecipheriv, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
 const VERSION = 'v1';
-/** OAuth round-trips are interactive; 15 minutes is ample and short enough to matter. */
-export const STATE_TTL_MS = 15 * 60_000;
+/** OAuth round-trips are interactive and human-paced; an hour keeps retries painless. */
+export const STATE_TTL_MS = 60 * 60_000;
 /** Tolerate small clock skew when validating `state`. */
 const STATE_SKEW_MS = 60_000;
 
