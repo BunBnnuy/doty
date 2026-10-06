@@ -8,6 +8,7 @@
 
 import type { Connection } from '@doty/dot-state';
 import { isRetryableSend, normalizeServerUrl } from './api.js';
+import { MAX_CHAT_ROWS, rowsToDrop } from './limit.js';
 import { renderMarkdown } from './markdown.js';
 import { createQuestionRow, type PendingQuestion } from './questions.js';
 import type { SseFrame } from './sse.js';
@@ -97,6 +98,7 @@ export function mountChat(options: MountChatOptions): ChatPanel {
   const serverForm = document.getElementById('server-form');
   const serverInput = document.getElementById('server-url');
   const serverDetails = document.getElementById('server-settings');
+  const scrollBottom = document.getElementById('scroll-bottom');
 
   const items: Item[] = [];
   const byId = new Map<string, { item: Item; element: HTMLLIElement }>();
@@ -112,12 +114,18 @@ export function mountChat(options: MountChatOptions): ChatPanel {
 
   if (serverInput instanceof HTMLInputElement) serverInput.value = options.serverUrl;
   renderEmpty();
+  updateScrollButton();
 
   // Markdown links must not navigate the app window away.
   list.addEventListener('click', (event) => {
     if (event.target instanceof Element && event.target.closest('a')) {
       event.preventDefault();
     }
+  });
+
+  list.addEventListener('scroll', updateScrollButton, { passive: true });
+  scrollBottom?.addEventListener('click', () => {
+    list.scrollTo({ top: list.scrollHeight, behavior: 'smooth' });
   });
 
   composer.addEventListener('submit', (event) => {
@@ -156,6 +164,32 @@ export function mountChat(options: MountChatOptions): ChatPanel {
     const show = items.length === 0 && pendingQuestions.length === 0;
     empty.hidden = !show;
     empty.textContent = EMPTY_COPY[connection];
+  }
+
+  /** True when the newest row is (near) visible. */
+  function atBottom(): boolean {
+    return list.scrollHeight - list.scrollTop - list.clientHeight < 48;
+  }
+
+  /** Show the jump-to-bottom button only while scrolled away from the newest row. */
+  function updateScrollButton(): void {
+    if (scrollBottom instanceof HTMLButtonElement) scrollBottom.hidden = atBottom();
+  }
+
+  /** Keep only the newest rows so a long session cannot flood the panel. */
+  function trimRows(): void {
+    const drops = rowsToDrop(items.map((item) => item.status), MAX_CHAT_ROWS);
+    if (drops.length === 0) return;
+    for (const index of drops) {
+      const item = items[index];
+      if (!item) continue;
+      byId.get(item.id)?.element.remove();
+      byId.delete(item.id);
+    }
+    for (let i = drops.length - 1; i >= 0; i -= 1) {
+      const index = drops[i];
+      if (index !== undefined) items.splice(index, 1);
+    }
   }
 
   function setConnection(status: Connection): void {
@@ -234,6 +268,7 @@ export function mountChat(options: MountChatOptions): ChatPanel {
     questionRows = pendingQuestions.map(createQuestionRow);
     for (const row of questionRows) list.append(row);
     renderEmpty();
+    updateScrollButton();
   }
 
   function setPendingQuestions(questions: PendingQuestion[]): void {
@@ -265,13 +300,15 @@ export function mountChat(options: MountChatOptions): ChatPanel {
     items.push(item);
     const element = renderItem(item);
     byId.set(item.id, { item, element });
-    const stick = list.scrollHeight - list.scrollTop - list.clientHeight < 48;
+    const stick = atBottom();
     list.append(element);
     // Keep the pending-question cards at the bottom of the chat.
     for (const row of questionRows) list.append(row);
+    trimRows();
     if (stick || item.role === 'user') {
       list.scrollTop = list.scrollHeight;
     }
+    updateScrollButton();
     renderEmpty();
     if (live) {
       options.onMessage?.({

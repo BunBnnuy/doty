@@ -8,6 +8,9 @@ The brains live in `apps/server`.
 - Transparent, borderless, always-on-top floating window and a tray icon.
 - Mounts `@doty/avatar` on the shared `DotState` store.
 - Chat / run panel. Sending `POST`s `/message` (default `http://localhost:8787`).
+- The transcript keeps only the newest 10 rows and shows a jump-to-bottom button
+  while scrolled away from the newest message, so long sessions do not flood the
+  panel.
 - SSE client for `GET /events`. Frames are parsed as native SSE (`id` → seq,
   `event` → type, `data` → JSON payload). Reconnects send `Last-Event-ID`.
 - Fake `DotState` driver while the server is unreachable. Queued messages flush

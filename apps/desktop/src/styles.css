@@ -247,6 +247,35 @@ body {
   display: none;
 }
 
+/* Jump to the newest message when the transcript is scrolled up. */
+#scroll-bottom {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: rgba(20, 18, 32, 0.94);
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+  cursor: pointer;
+}
+
+#scroll-bottom[hidden] {
+  display: none;
+}
+
+#scroll-bottom:hover {
+  filter: brightness(1.15);
+}
+
 .msg {
   display: flex;
   flex-direction: column;
