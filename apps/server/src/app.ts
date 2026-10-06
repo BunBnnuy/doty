@@ -13,6 +13,7 @@ import { registerEventRoutes } from './routes/events.js';
 import { registerHealthRoutes } from './routes/health.js';
 import { registerMessageRoutes } from './routes/message.js';
 import { registerHarnessRoutes } from './routes/harness.js';
+import { registerLandingRoutes } from './routes/landing.js';
 import { AgentRuntime, type AgentRuntimeOptions } from './agent/runtime.js';
 import type { AgentRunner } from './agent/runner.js';
 import { createHash, timingSafeEqual } from 'node:crypto';
@@ -62,6 +63,7 @@ export function buildApp(options: BuildAppOptions = {}): BuiltApp {
   void app.register(cors, { origin: true });
 
   registerHealthRoutes(app);
+  registerLandingRoutes(app);
   registerEventRoutes(app, log);
   registerHarnessRoutes(app, log);
   const runtime: AgentRunner | undefined = options.runner

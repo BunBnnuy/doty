@@ -1,0 +1,635 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Doty — an always-on AI assistant</title>
+    <meta
+      name="description"
+      content="Doty is an always-on AI assistant: an online brain with an animated dot, a thin desktop presence, and a Discord bot that remembers."
+    />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#0b0a14" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3CradialGradient id='g' cx='35%25' cy='30%25'%3E%3Cstop offset='0' stop-color='%23c9c2ff'/%3E%3Cstop offset='0.55' stop-color='%236c5cff'/%3E%3Cstop offset='1' stop-color='%23241c66'/%3E%3C/radialGradient%3E%3C/defs%3E%3Ccircle cx='32' cy='34' r='24' fill='url(%23g)'/%3E%3C/svg%3E"
+    />
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0a14;
+        --bg-2: #0e0c1c;
+        --ink: rgba(255, 255, 255, 0.94);
+        --muted: rgba(255, 255, 255, 0.62);
+        --faint: rgba(255, 255, 255, 0.4);
+        --accent: #6c5cff;
+        --accent-2: #a79cff;
+        --line: rgba(255, 255, 255, 0.1);
+        --card: rgba(255, 255, 255, 0.035);
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html {
+        scroll-behavior: smooth;
+      }
+      body {
+        margin: 0;
+        background:
+          radial-gradient(900px 520px at 78% -8%, rgba(108, 92, 255, 0.22), transparent 62%),
+          radial-gradient(700px 420px at 12% 6%, rgba(167, 156, 255, 0.1), transparent 60%),
+          var(--bg);
+        color: var(--ink);
+        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        line-height: 1.6;
+        -webkit-font-smoothing: antialiased;
+      }
+      a {
+        color: var(--accent-2);
+        text-decoration: none;
+      }
+      a:hover {
+        color: #fff;
+      }
+      .wrap {
+        width: min(1080px, 100% - 40px);
+        margin-inline: auto;
+      }
+
+      /* Nav */
+      header.nav {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        backdrop-filter: blur(12px);
+        background: rgba(11, 10, 20, 0.72);
+        border-bottom: 1px solid var(--line);
+      }
+      .nav-inner {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 14px 0;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-weight: 650;
+        letter-spacing: 0.01em;
+        color: var(--ink);
+      }
+      .brand-dot {
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: radial-gradient(circle at 34% 30%, #c9c2ff, #6c5cff 58%, #241c66);
+        box-shadow: 0 0 16px rgba(108, 92, 255, 0.75);
+      }
+      .nav-links {
+        margin-left: auto;
+        display: flex;
+        align-items: center;
+        gap: 20px;
+        font-size: 14.5px;
+      }
+      .nav-links a {
+        color: var(--muted);
+      }
+      .nav-links a:hover {
+        color: var(--ink);
+      }
+
+      /* Hero */
+      .hero {
+        display: grid;
+        grid-template-columns: 1.15fr 0.85fr;
+        align-items: center;
+        gap: 48px;
+        padding: 76px 0 84px;
+      }
+      .eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 4px 12px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        font-size: 12.5px;
+        color: var(--muted);
+        background: rgba(255, 255, 255, 0.04);
+      }
+      .eyebrow b {
+        color: var(--accent-2);
+        font-weight: 600;
+      }
+      h1 {
+        font-size: clamp(38px, 6.2vw, 68px);
+        line-height: 1.02;
+        letter-spacing: -0.03em;
+        margin: 20px 0 0;
+      }
+      h1 .grad {
+        background: linear-gradient(92deg, #fff 20%, var(--accent-2) 70%, #6c5cff);
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+      }
+      .lede {
+        margin: 20px 0 0;
+        font-size: clamp(16px, 2vw, 19px);
+        color: var(--muted);
+        max-width: 34em;
+      }
+      .cta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 30px;
+      }
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 11px 18px;
+        border-radius: 10px;
+        font-weight: 600;
+        font-size: 15px;
+        border: 1px solid transparent;
+      }
+      .btn-primary {
+        background: var(--accent);
+        color: #fff;
+        box-shadow: 0 10px 30px rgba(108, 92, 255, 0.35);
+      }
+      .btn-primary:hover {
+        color: #fff;
+        filter: brightness(1.08);
+      }
+      .btn-ghost {
+        border-color: var(--line);
+        color: var(--ink);
+        background: rgba(255, 255, 255, 0.04);
+      }
+      .btn-ghost:hover {
+        color: #fff;
+        background: rgba(255, 255, 255, 0.08);
+      }
+
+      /* The character */
+      .stage {
+        position: relative;
+        display: grid;
+        place-items: center;
+        aspect-ratio: 1;
+        max-width: 420px;
+        margin-inline: auto;
+        width: 100%;
+      }
+      .orbit {
+        position: absolute;
+        inset: 8%;
+        border-radius: 50%;
+        border: 1px dashed rgba(167, 156, 255, 0.28);
+      }
+      .orbit span {
+        position: absolute;
+        top: 50%;
+        left: 100%;
+        width: 10px;
+        height: 10px;
+        margin: -5px 0 0 -5px;
+        border-radius: 50%;
+        background: var(--accent-2);
+        box-shadow: 0 0 12px rgba(167, 156, 255, 0.9);
+      }
+      .orbit.a {
+        animation: spin 26s linear infinite;
+      }
+      .orbit.b {
+        inset: 20%;
+        animation: spin 18s linear infinite reverse;
+      }
+      .orbit.b span {
+        background: #7dffa8;
+        box-shadow: 0 0 12px rgba(125, 255, 168, 0.9);
+      }
+      .orb {
+        width: 62%;
+        aspect-ratio: 1;
+        border-radius: 50%;
+        background:
+          radial-gradient(circle at 34% 28%, #d7d2ff 0%, #8f82ff 26%, #6c5cff 55%, #2a2170 88%);
+        box-shadow:
+          0 0 70px 8px rgba(108, 92, 255, 0.5),
+          inset -18px -22px 60px rgba(10, 6, 40, 0.75),
+          inset 14px 16px 44px rgba(255, 255, 255, 0.22);
+        animation: float 7s ease-in-out infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      @keyframes float {
+        0%,
+        100% {
+          transform: translateY(-2.5%);
+        }
+        50% {
+          transform: translateY(2.5%);
+        }
+      }
+
+      section {
+        padding: 72px 0;
+        border-top: 1px solid var(--line);
+      }
+      h2 {
+        font-size: clamp(24px, 3.4vw, 34px);
+        letter-spacing: -0.02em;
+        margin: 0 0 8px;
+      }
+      .section-lede {
+        color: var(--muted);
+        margin: 0 0 36px;
+        max-width: 46em;
+      }
+
+      /* Features */
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 16px;
+      }
+      .card {
+        border: 1px solid var(--line);
+        background: var(--card);
+        border-radius: 14px;
+        padding: 20px;
+      }
+      .card:hover {
+        border-color: rgba(167, 156, 255, 0.4);
+        background: rgba(255, 255, 255, 0.055);
+      }
+      .card .ico {
+        font-size: 20px;
+        line-height: 1;
+      }
+      .card h3 {
+        margin: 12px 0 6px;
+        font-size: 16.5px;
+      }
+      .card p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 14.5px;
+      }
+      .tag {
+        display: inline-block;
+        margin-top: 12px;
+        font-size: 11px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--faint);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 2px 9px;
+      }
+
+      /* Architecture */
+      .flow {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+      }
+      .panel {
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 22px;
+        background: var(--card);
+      }
+      .panel h3 {
+        margin: 0 0 4px;
+        font-size: 17px;
+      }
+      .panel .sub {
+        margin: 0 0 16px;
+        color: var(--faint);
+        font-size: 13px;
+      }
+      .panel ul {
+        margin: 0;
+        padding-left: 18px;
+        color: var(--muted);
+        font-size: 14.5px;
+      }
+      .panel li {
+        margin: 5px 0;
+      }
+      .bridge {
+        text-align: center;
+        color: var(--faint);
+        font-size: 13px;
+        padding-top: 18px;
+      }
+
+      /* Status */
+      .split {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+      }
+      .status-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        font-size: 14.5px;
+      }
+      .status-list li {
+        display: flex;
+        gap: 10px;
+        padding: 9px 0;
+        border-bottom: 1px solid var(--line);
+        color: var(--muted);
+      }
+      .status-list li:last-child {
+        border-bottom: 0;
+      }
+      .status-list .mark {
+        flex: 0 0 auto;
+      }
+      .ok {
+        color: #7dffa8;
+      }
+      .soon {
+        color: var(--faint);
+      }
+
+      /* Docs */
+      .docs {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 16px;
+      }
+      .doc {
+        display: block;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 18px;
+        background: var(--card);
+      }
+      .doc:hover {
+        border-color: rgba(167, 156, 255, 0.4);
+      }
+      .doc strong {
+        display: block;
+        color: var(--ink);
+        font-size: 15px;
+        margin-bottom: 4px;
+      }
+      .doc span {
+        color: var(--muted);
+        font-size: 13.5px;
+      }
+
+      footer {
+        border-top: 1px solid var(--line);
+        padding: 34px 0 46px;
+        color: var(--faint);
+        font-size: 13.5px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 22px;
+        align-items: center;
+      }
+      footer .spacer {
+        margin-left: auto;
+      }
+
+      @media (max-width: 860px) {
+        .hero {
+          grid-template-columns: 1fr;
+          gap: 28px;
+          padding-top: 52px;
+        }
+        .stage {
+          max-width: 320px;
+          order: -1;
+        }
+        .grid,
+        .docs {
+          grid-template-columns: 1fr 1fr;
+        }
+        .flow,
+        .split {
+          grid-template-columns: 1fr;
+        }
+        .nav-links {
+          gap: 14px;
+          font-size: 13.5px;
+        }
+      }
+      @media (max-width: 560px) {
+        .grid,
+        .docs {
+          grid-template-columns: 1fr;
+        }
+        .nav-links a.hide-sm {
+          display: none;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        html {
+          scroll-behavior: auto;
+        }
+        .orb,
+        .orbit.a,
+        .orbit.b {
+          animation: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="nav">
+      <div class="wrap nav-inner">
+        <span class="brand"><span class="brand-dot"></span>Doty</span>
+        <nav class="nav-links">
+          <a href="#features">Features</a>
+          <a href="#how" class="hide-sm">How it works</a>
+          <a href="#status" class="hide-sm">Status</a>
+          <a href="#docs" class="hide-sm">Docs</a>
+          <a href="https://github.com/BunBnnuy/doty">GitHub ↗</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="wrap">
+      <section class="hero" style="border-top: 0; padding-top: 72px">
+        <div>
+          <span class="eyebrow"><b>Always-on</b> · online brain + thin client</span>
+          <h1>An assistant with a <span class="grad">characterful dot</span>.</h1>
+          <p class="lede">
+            Doty keeps working between conversations. The brains live online — an
+            agent loop, scheduler, memory and integrations — while a tiny floating
+            dot on your desktop shows what it is doing, and a Discord bot answers
+            you from anywhere.
+          </p>
+          <div class="cta">
+            <a class="btn btn-primary" href="https://github.com/BunBnnuy/doty">View the source ↗</a>
+            <a class="btn btn-ghost" href="https://github.com/BunBnnuy/doty/blob/master/docs/PLAN.md">Read the plan</a>
+          </div>
+        </div>
+        <div class="stage" aria-hidden="true">
+          <div class="orbit a"><span></span></div>
+          <div class="orbit b"><span></span></div>
+          <div class="orb"></div>
+        </div>
+      </section>
+
+      <section id="features">
+        <h2>What it does</h2>
+        <p class="section-lede">
+          Not a chatbot in a browser tab — an agent that runs without you watching,
+          fronted by a dot that communicates state.
+        </p>
+        <div class="grid">
+          <div class="card">
+            <div class="ico">◎</div>
+            <h3>Always-on brain</h3>
+            <p>
+              A Fastify API and worker own the agent loop, scheduler and
+              integrations. Close the laptop; work still finishes and notifies you.
+            </p>
+          </div>
+          <div class="card">
+            <div class="ico">✦</div>
+            <h3>Presence, not a window</h3>
+            <p>
+              A transparent, always-on-top Tauri dot with a tray anchor, native
+              notifications and a chat panel that stays out of the way.
+            </p>
+          </div>
+          <div class="card">
+            <div class="ico">⌘</div>
+            <h3>Discord, natively</h3>
+            <p>
+              DMs, mentions and replies; scheduled reminders; and it can join a
+              voice channel for music and speech.
+            </p>
+          </div>
+          <div class="card">
+            <div class="ico">🧠</div>
+            <h3>Long-term memory</h3>
+            <p>
+              Optional, pgvector-backed retrieval that carries preferences and
+              context across conversations and clients.
+            </p>
+          </div>
+          <div class="card">
+            <div class="ico">🛰</div>
+            <h3>Harness awareness</h3>
+            <p>
+              Codex, OpenCode and T3 sessions appear as orbiting satellite dots with
+              live status, and as messages in the chat.
+            </p>
+          </div>
+          <div class="card">
+            <div class="ico">⇄</div>
+            <h3>Shared sessions</h3>
+            <p>
+              The desktop client and your Discord DMs can share one conversation, so
+              memory and context follow you between devices.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section id="how">
+        <h2>How it works</h2>
+        <p class="section-lede">
+          Two halves joined by three frozen contracts, plus a Postgres core.
+        </p>
+        <div class="flow">
+          <div class="panel">
+            <h3>Desktop client</h3>
+            <p class="sub">Tauri v2 · thin presence layer</p>
+            <ul>
+              <li>Floating dot, tray, autostart, hotkey</li>
+              <li>Chat over REST + SSE, with offline queueing</li>
+              <li>Rust harness watcher (Codex · OpenCode · T3)</li>
+              <li>Native notifications and local tool bridge</li>
+            </ul>
+          </div>
+          <div class="panel">
+            <h3>Online service</h3>
+            <p class="sub">Node · Fastify API + worker</p>
+            <ul>
+              <li>Agent loop, scheduler and policy</li>
+              <li>Memory (Postgres + pgvector)</li>
+              <li>Discord · voice · tools · MCP</li>
+              <li>Replayable event log over SSE</li>
+            </ul>
+          </div>
+        </div>
+        <p class="bridge">
+          desktop ◀── REST / SSE ──▶ service ◀── metadata ──▶ watchers
+        </p>
+      </section>
+
+      <section id="status">
+        <h2>Status</h2>
+        <p class="section-lede">An early build, growing through the milestones in the plan.</p>
+        <div class="split">
+          <div class="panel">
+            <h3>In place today</h3>
+            <p class="sub">&nbsp;</p>
+            <ul class="status-list">
+              <li><span class="mark ok">●</span> Agent loop (OpenCode or in-process OpenAI-compatible)</li>
+              <li><span class="mark ok">●</span> Discord bot: chat, voice music, speech, reminders</li>
+              <li><span class="mark ok">●</span> Rust harness watchers and satellite dots</li>
+              <li><span class="mark ok">●</span> Desktop dot, tray and chat panel</li>
+              <li><span class="mark ok">●</span> Long-term memory (optional)</li>
+            </ul>
+          </div>
+          <div class="panel">
+            <h3>Planned</h3>
+            <p class="sub">&nbsp;</p>
+            <ul class="status-list">
+              <li><span class="mark soon">○</span> Managed sandbox: code exec + headless browser</li>
+              <li><span class="mark soon">○</span> Local tool bridge — control your machine</li>
+              <li><span class="mark soon">○</span> Approvals inbox and policy engine</li>
+              <li><span class="mark soon">○</span> MCP connections for real apps</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section id="docs">
+        <h2>Documentation</h2>
+        <p class="section-lede">The plan is the source of truth; each half documents itself.</p>
+        <div class="docs">
+          <a class="doc" href="https://github.com/BunBnnuy/doty/blob/master/docs/PLAN.md">
+            <strong>Design &amp; build plan →</strong>
+            <span>Milestones, architecture and the decisions behind them.</span>
+          </a>
+          <a class="doc" href="https://github.com/BunBnnuy/doty/blob/master/apps/server/README.md">
+            <strong>Server →</strong>
+            <span>Runtime, tools, memory, Discord and environment variables.</span>
+          </a>
+          <a class="doc" href="https://github.com/BunBnnuy/doty/blob/master/apps/desktop/README.md">
+            <strong>Desktop client →</strong>
+            <span>The shell, harness watchers and question handling.</span>
+          </a>
+        </div>
+      </section>
+    </main>
+
+    <footer class="wrap">
+      <span><span class="brand-dot" style="display: inline-block; width: 11px; height: 11px; vertical-align: -1px"></span> Doty</span>
+      <span class="spacer">A personal, single-user instance.</span>
+      <a href="https://github.com/BunBnnuy/doty">github.com/BunBnnuy/doty</a>
+    </footer>
+  </body>
+</html>
