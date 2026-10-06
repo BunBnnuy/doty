@@ -40,7 +40,7 @@ describe('jev classifier', () => {
     };
     expect(await classifyVoiceIntentJev('pon bachata', { baseUrl: 'http://x', apiKey: 'k' }, fake))
       .toEqual({ cmd: 'play' });
-    expect(body?.state).toBe('pon bachata');
+    expect(String(body?.state)).toContain('pon bachata');
     expect((body?.questions as { command: { type: string } }).command.type).toBe('choice');
   });
 });

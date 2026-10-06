@@ -102,24 +102,29 @@ export async function classifyVoiceIntent(
 // ---------------------------------------------------------------------------
 
 export interface JevConfig {
-  /** e.g. https://jevtypesafeai.com/api/v1/decide */
+  /** OpenCode exposes Jev at https://opencode.ai/zen/v1/systemone */
   baseUrl: string;
   apiKey: string;
-  /** Pin a version like `jev-1.13.0`; omit for the hosted default. */
+  /** Model id, e.g. `jev-1.13-free`. */
   model?: string;
+  userAgent?: string;
+  sessionId?: string;
   timeoutMs?: number;
 }
 
+export const JEV_DEFAULT_URL = 'https://opencode.ai/zen/v1/systemone';
+export const JEV_DEFAULT_MODEL = 'jev-1.13-free';
+
 const JEV_CRITERIA: Record<string, string> = {
-  play: 'start or queue music; the song/artist/url is what should be played',
-  skip: 'go to the next track',
-  stop: 'leave the voice channel / disconnect',
+  play: 'play or queue music; they name a song, artist, genre or URL',
+  skip: 'skip to the next song',
+  stop: 'leave / disconnect from the voice channel',
   pause: 'pause the music',
-  resume: 'resume the music',
-  queue: 'show what is currently queued',
+  resume: 'resume / continue the music',
+  queue: 'see the list of queued songs',
   join: 'join the voice channel',
-  say: 'speak the given text out loud',
-  none: 'not a command; conversation, a question, or a greeting',
+  say: 'speak a given text out loud',
+  none: 'none of these; it is conversation, a question or a greeting',
 };
 
 /** Read `answers.command.choice` from a Jev response. */
@@ -134,7 +139,7 @@ export function parseJevAnswer(body: unknown): VoiceCommand | null {
   return { cmd: choice as VoiceCommandName };
 }
 
-/** Classify a message with the Jev typed-decision API. */
+/** Classify a message with the Jev typed-decision API (via OpenCode). */
 export async function classifyVoiceIntentJev(
   text: string,
   config: JevConfig,
@@ -149,15 +154,17 @@ export async function classifyVoiceIntentJev(
         'content-type': 'application/json',
         accept: 'application/json',
         Authorization: `Bearer ${config.apiKey}`,
+        'User-Agent': config.userAgent ?? 'doty/0.1',
+        'x-opencode-session': config.sessionId ?? 'doty-commands',
       },
       signal: controller.signal,
       body: JSON.stringify({
-        ...(config.model ? { model: config.model } : {}),
-        state: text,
+        model: config.model ?? JEV_DEFAULT_MODEL,
+        state: `A Discord user wrote this message to the music bot "Doty": ${JSON.stringify(text)}`,
         questions: {
           command: {
             type: 'choice',
-            instructions: 'Which music/voice command does the message ask for, if any?',
+            instructions: 'What does the user want Doty to do? Pick the single best option.',
             criteria: JEV_CRITERIA,
           },
         },

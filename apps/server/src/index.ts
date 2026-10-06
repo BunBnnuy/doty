@@ -20,7 +20,7 @@ import { PgEventLog } from './events/pg-log.js';
 import { AgentMemory, OpenAIEmbedder, embeddingConfigFromEnv, memoryStoreFromEnv } from './memory/index.js';
 import { parseAllowedUserIds, parseTriggerWords, startDiscordBot, type DiscordBot } from './integrations/discord.js';
 import { extractCommandArg, parseVoiceCommand, VoiceManager } from './integrations/voice.js';
-import { classifyVoiceIntent, classifyVoiceIntentJev, type ClassifierConfig, type JevConfig } from './integrations/command-classifier.js';
+import { classifyVoiceIntent, classifyVoiceIntentJev, JEV_DEFAULT_MODEL, JEV_DEFAULT_URL, type ClassifierConfig, type JevConfig } from './integrations/command-classifier.js';
 import { OpenCodeClient, parseOpenCodeModel } from './integrations/opencode.js';
 import { OpenCodeAgent } from './agent/opencode-agent.js';
 import { SessionStore } from './agent/sessions.js';
@@ -101,9 +101,11 @@ async function main(): Promise<void> {
     const jevKey = process.env.JEV_API_KEY?.trim();
     const jev: JevConfig | undefined = jevKey
       ? {
-          baseUrl: process.env.JEV_BASE_URL?.trim() || 'https://jevtypesafeai.com/api/v1/decide',
+          baseUrl: process.env.JEV_BASE_URL?.trim() || JEV_DEFAULT_URL,
           apiKey: jevKey,
-          ...(process.env.JEV_MODEL?.trim() ? { model: process.env.JEV_MODEL.trim() } : {}),
+          model: process.env.JEV_MODEL?.trim() || JEV_DEFAULT_MODEL,
+          ...(process.env.OPENAI_USER_AGENT?.trim() ? { userAgent: process.env.OPENAI_USER_AGENT.trim() } : {}),
+          ...(process.env.OPENAI_SESSION_ID?.trim() ? { sessionId: process.env.OPENAI_SESSION_ID.trim() } : {}),
         }
       : undefined;
     app.log.info(jev ? 'jev classifier: enabled' : 'jev classifier: disabled');
