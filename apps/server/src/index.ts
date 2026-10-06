@@ -20,6 +20,7 @@ import { PgEventLog } from './events/pg-log.js';
 import { AgentMemory, OpenAIEmbedder, embeddingConfigFromEnv, memoryStoreFromEnv } from './memory/index.js';
 import { parseAllowedUserIds, parseTriggerWords, startDiscordBot, type DiscordBot } from './integrations/discord.js';
 import { extractCommandArg, parseVoiceCommand, VoiceManager } from './integrations/voice.js';
+import { handleReminderMessage, ReminderService, resolveTimeZone } from './integrations/reminders.js';
 import { classifyVoiceIntent, classifyVoiceIntentJev, JEV_DEFAULT_MODEL, JEV_DEFAULT_URL, type ClassifierConfig, type JevConfig } from './integrations/command-classifier.js';
 import { OpenCodeClient, parseOpenCodeModel } from './integrations/opencode.js';
 import { OpenCodeAgent } from './agent/opencode-agent.js';
@@ -80,6 +81,8 @@ async function main(): Promise<void> {
   // Optional Discord integration: receive messages and reply with the agent.
   let discord: DiscordBot | undefined;
   let voice: VoiceManager | undefined;
+  let reminders: ReminderService | undefined;
+  const timeZone = resolveTimeZone(process.env.DOTY_TZ);
   const discordToken = process.env.DISCORD_BOT_TOKEN?.trim();
   if (discordToken && runtime) {
     const allowed = parseAllowedUserIds(process.env.DISCORD_ALLOWED_USER_IDS);
@@ -119,6 +122,14 @@ async function main(): Promise<void> {
         ...(process.env.YTDLP_EXTRA_ARGS?.trim() ? { extraArgs: process.env.YTDLP_EXTRA_ARGS.trim().split(/\s+/) } : {}),
       },
     });
+    reminders = new ReminderService({
+      log: eventLog,
+      onDue: (reminder) => {
+        const prefix = reminder.guildId ? `<@${reminder.userId}> ` : '';
+        return discord?.send(reminder.channelId, `⏰ ${prefix}${reminder.text}`);
+      },
+      logger: (message) => app.log.info(message),
+    });
     discord = startDiscordBot({
       token: discordToken,
       allowedUserIds: allowed,
@@ -128,6 +139,15 @@ async function main(): Promise<void> {
       onVoiceStateUpdate: (data) => voice?.onVoiceStateUpdate(data),
       onVoiceServerUpdate: (data) => voice?.onVoiceServerUpdate(data),
       onCommand: async (text, context) => {
+        const reminderReply = reminders
+          ? handleReminderMessage(text, {
+              channelId: context.channelId,
+              userId: context.userId,
+              ...(context.guildId ? { guildId: context.guildId } : {}),
+              conversationKey: context.conversationKey,
+            }, reminders, { timeZone, triggerWords })
+          : undefined;
+        if (reminderReply !== undefined) return reminderReply;
         let command = parseVoiceCommand(text, triggerWords);
         if (!command && jev) command = await classifyVoiceIntentJev(text, jev);
         if (!command && classifier && text.split(/\s+/).length <= 12) {
@@ -174,6 +194,8 @@ async function main(): Promise<void> {
       },
       log: (message) => app.log.info(message),
     });
+    reminders.hydrate();
+    app.log.info(`reminders: ${reminders.pending()} pending (tz ${timeZone})`);
     app.log.info('Discord integration enabled');
   } else if (discordToken && !runtime) {
     app.log.warn('DISCORD_BOT_TOKEN is set but no agent backend is configured; Discord is disabled');
@@ -181,6 +203,7 @@ async function main(): Promise<void> {
 
   const shutdown = async (signal: string): Promise<void> => {
     app.log.info({ signal }, 'shutting down');
+    reminders?.stop();
     voice?.destroy();
     discord?.stop();
     await app.close();

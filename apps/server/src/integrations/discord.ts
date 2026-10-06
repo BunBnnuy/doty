@@ -51,6 +51,8 @@ export interface DiscordBotOptions {
 }
 
 export interface DiscordBot {
+  /** Post a message to a channel unprompted (e.g. a scheduled reminder). */
+  send(channelId: string, content: string): Promise<void>;
   stop(): void;
 }
 
@@ -382,6 +384,7 @@ export function startDiscordBot(options: DiscordBotOptions): DiscordBot {
   connect();
 
   return {
+    send: sendMessage,
     stop() {
       stopped = true;
       stopHeartbeat();
