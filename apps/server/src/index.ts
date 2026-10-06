@@ -18,7 +18,7 @@ import { InMemoryEventLog } from './events/log.js';
 import { OpenAIChatProvider, openAIConfigFromEnv } from './provider/openai.js';
 import { PgEventLog } from './events/pg-log.js';
 import { AgentMemory, OpenAIEmbedder, embeddingConfigFromEnv, memoryStoreFromEnv } from './memory/index.js';
-import { parseAllowedUserIds, startDiscordBot, type DiscordBot } from './integrations/discord.js';
+import { parseAllowedUserIds, parseTriggerWords, startDiscordBot, type DiscordBot } from './integrations/discord.js';
 import { OpenCodeClient, parseOpenCodeModel } from './integrations/opencode.js';
 import { OpenCodeAgent } from './agent/opencode-agent.js';
 import { SessionStore } from './agent/sessions.js';
@@ -87,7 +87,7 @@ async function main(): Promise<void> {
       token: discordToken,
       allowedUserIds: allowed,
       ...(process.env.DISCORD_CHANNEL_ID?.trim() ? { channelId: process.env.DISCORD_CHANNEL_ID.trim() } : {}),
-      mentionOnly: process.env.DISCORD_MENTION_ONLY !== 'false',
+      triggerWords: parseTriggerWords(process.env.DISCORD_TRIGGER_WORDS),
       handle: async (text, context) => {
         eventLog.append({ type: 'message', data: { text } });
         const result = await runtime.run(text, context.conversationKey);

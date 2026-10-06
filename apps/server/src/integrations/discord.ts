@@ -27,8 +27,8 @@ export interface DiscordBotOptions {
   allowedUserIds?: ReadonlySet<string>;
   /** Restrict guild replies to this channel. DMs always work. */
   channelId?: string;
-  /** In guilds without a fixed channel, only answer when mentioned. Default true. */
-  mentionOnly?: boolean;
+  /** Case-insensitive words that trigger a reply. Default ['doty','bot']. */
+  triggerWords?: readonly string[];
   /** Request the privileged MESSAGE_CONTENT intent. Default true. */
   messageContent?: boolean;
   /** Produce the reply text for an incoming message (runs the agent). */
@@ -89,21 +89,39 @@ export interface IncomingMessage {
   authorBot: boolean;
   content: string;
   mentionedBot: boolean;
+  /** The message is a reply to one of the bot's messages. */
+  replyToBot: boolean;
 }
+
+/** Case-insensitive words that trigger a reply. */
+export const DEFAULT_TRIGGER_WORDS: readonly string[] = ['doty', 'bot'];
 
 export interface RespondOptions {
   allowedUserIds: ReadonlySet<string>;
   channelId?: string;
-  mentionOnly: boolean;
+  triggerWords?: readonly string[];
 }
 
-/** Whether Doty should answer this message. */
+/**
+ * Whether Doty should answer: DMs, messages that mention it, replies to it, or a
+ * message containing a trigger word ("doty"/"bot"). Guild messages are further
+ * limited to `channelId` when configured.
+ */
 export function shouldRespondToMessage(msg: IncomingMessage, options: RespondOptions): boolean {
   if (msg.authorBot) return false;
   if (options.allowedUserIds.size > 0 && !options.allowedUserIds.has(msg.authorId)) return false;
   if (msg.guildId === undefined) return true; // DM
-  if (options.channelId) return msg.channelId === options.channelId;
-  return options.mentionOnly ? msg.mentionedBot : true;
+  if (options.channelId && msg.channelId !== options.channelId) return false;
+  if (msg.mentionedBot || msg.replyToBot) return true;
+  const content = msg.content.toLowerCase();
+  return (options.triggerWords ?? DEFAULT_TRIGGER_WORDS)
+    .some((word) => word.length > 0 && content.includes(word.toLowerCase()));
+}
+
+/** Parse `DISCORD_TRIGGER_WORDS` (comma-separated); falls back to the defaults. */
+export function parseTriggerWords(raw: string | undefined): string[] {
+  const words = (raw ?? '').split(',').map((word) => word.trim()).filter(Boolean);
+  return words.length > 0 ? words : [...DEFAULT_TRIGGER_WORDS];
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -120,6 +138,7 @@ function readIncoming(data: unknown, botUserId: string | undefined): IncomingMes
   const authorId = typeof author?.id === 'string' ? author.id : '';
   if (!channelId || !authorId) return null;
   const mentions = Array.isArray(record.mentions) ? record.mentions : [];
+  const referencedAuthor = asRecord(asRecord(record.referenced_message)?.author);
   return {
     channelId,
     messageId: typeof record.id === 'string' ? record.id : '',
@@ -128,16 +147,16 @@ function readIncoming(data: unknown, botUserId: string | undefined): IncomingMes
     authorBot: author?.bot === true,
     content: typeof record.content === 'string' ? record.content : '',
     mentionedBot: botUserId !== undefined && mentions.some((m) => asRecord(m)?.id === botUserId),
+    replyToBot: botUserId !== undefined && referencedAuthor?.id === botUserId,
   };
 }
 
 export function startDiscordBot(options: DiscordBotOptions): DiscordBot {
   const allowed = options.allowedUserIds ?? new Set<string>();
-  const mentionOnly = options.mentionOnly ?? true;
   const log = options.log ?? (() => {});
   const respondOptions: RespondOptions = {
     allowedUserIds: allowed,
-    mentionOnly,
+    triggerWords: options.triggerWords ?? DEFAULT_TRIGGER_WORDS,
     ...(options.channelId ? { channelId: options.channelId } : {}),
   };
 
@@ -217,7 +236,7 @@ export function startDiscordBot(options: DiscordBotOptions): DiscordBot {
       // Metadata only: helps diagnose why a guild message was ignored (usually a
       // missing MESSAGE_CONTENT intent, which empties `content`).
       if (message.guildId) {
-        log(`discord: ignored guild message (channel=${message.channelId} mention=${message.mentionedBot} contentLen=${message.content.length})`);
+        log(`discord: ignored guild message (channel=${message.channelId} mention=${message.mentionedBot} reply=${message.replyToBot} contentLen=${message.content.length})`);
       }
       return;
     }

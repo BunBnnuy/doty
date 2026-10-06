@@ -21,8 +21,8 @@ in your shell (or your existing local dotenv configuration; never commit secrets
 - `DISCORD_ALLOWED_USER_IDS`: comma-separated Discord user ids allowed to talk to
   Doty (empty = anyone; the server logs a warning).
 - `DISCORD_CHANNEL_ID`: optional; restrict guild replies to this one channel.
-- `DISCORD_MENTION_ONLY`: set `false` to answer every guild message instead of
-  only messages that mention the bot.
+- `DISCORD_TRIGGER_WORDS`: comma-separated words that trigger a reply (default
+  `doty,bot`).
 
 Without `DOTY_TOKEN`, bearer authentication is disabled for local development and
 the server logs a prominent warning. **Do not expose that mode publicly.** When
@@ -131,6 +131,12 @@ The bot ignores other bots, strips its own mention, sends a typing indicator, an
 splits replies over 2000 characters. It uses the built-in `WebSocket` and `fetch`
 — no `discord.js` dependency. Incoming text is appended to the event log as a
 `message` event, so it also appears in the desktop chat.
+
+**When it replies.** DMs always get a reply. In a guild, Doty answers only when
+the message mentions it, replies to one of its messages, or contains a trigger
+word (`doty`/`bot` by default, configurable with `DISCORD_TRIGGER_WORDS`). Plain
+guild messages are ignored — which also means the `MESSAGE_CONTENT` intent is only
+needed for the trigger-word path; mentions and replies carry content regardless.
 
 **Conversation memory.** When the OpenCode backend is enabled, each conversation
 gets its own OpenCode session — one per DM user (`discord:dm:<userId>`), one per

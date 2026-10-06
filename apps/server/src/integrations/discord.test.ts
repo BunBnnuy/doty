@@ -3,6 +3,7 @@ import {
   chunkDiscordMessage,
   discordIntents,
   parseAllowedUserIds,
+  parseTriggerWords,
   shouldRespondToMessage,
   stripBotMention,
   type IncomingMessage,
@@ -15,6 +16,7 @@ const msg = (over: Partial<IncomingMessage> = {}): IncomingMessage => ({
   authorBot: false,
   content: 'hi',
   mentionedBot: false,
+  replyToBot: false,
   ...over,
 });
 
@@ -41,14 +43,27 @@ describe('discord helpers', () => {
     expect(chunkDiscordMessage('short')).toEqual(['short']);
   });
 
-  it('decides when to respond', () => {
+  it('parses the trigger words', () => {
+    expect(parseTriggerWords(undefined)).toEqual(['doty', 'bot']);
+    expect(parseTriggerWords(' hey , Hola ')).toEqual(['hey', 'Hola']);
+  });
+
+  it('responds to DMs, mentions, replies to Doty, and trigger words only', () => {
     const allowed = new Set(['u1']);
-    expect(shouldRespondToMessage(msg(), { allowedUserIds: allowed, mentionOnly: true })).toBe(true);
-    expect(shouldRespondToMessage(msg({ authorId: 'u2' }), { allowedUserIds: allowed, mentionOnly: true })).toBe(false);
-    expect(shouldRespondToMessage(msg({ authorBot: true }), { allowedUserIds: allowed, mentionOnly: true })).toBe(false);
-    expect(shouldRespondToMessage(msg({ guildId: 'g1' }), { allowedUserIds: allowed, mentionOnly: true })).toBe(false);
-    expect(shouldRespondToMessage(msg({ guildId: 'g1', mentionedBot: true }), { allowedUserIds: allowed, mentionOnly: true })).toBe(true);
-    expect(shouldRespondToMessage(msg({ guildId: 'g1', channelId: 'c1' }), { allowedUserIds: allowed, channelId: 'c1', mentionOnly: true })).toBe(true);
-    expect(shouldRespondToMessage(msg({ guildId: 'g1', channelId: 'c2' }), { allowedUserIds: allowed, channelId: 'c1', mentionOnly: true })).toBe(false);
+    expect(shouldRespondToMessage(msg(), { allowedUserIds: allowed })).toBe(true); // DM
+    expect(shouldRespondToMessage(msg({ authorId: 'u2' }), { allowedUserIds: allowed })).toBe(false);
+    expect(shouldRespondToMessage(msg({ authorBot: true }), { allowedUserIds: allowed })).toBe(false);
+    // Guild: plain message is ignored...
+    expect(shouldRespondToMessage(msg({ guildId: 'g1' }), { allowedUserIds: allowed })).toBe(false);
+    // ...but a mention, a reply to Doty, or a trigger word gets a reply.
+    expect(shouldRespondToMessage(msg({ guildId: 'g1', mentionedBot: true }), { allowedUserIds: allowed })).toBe(true);
+    expect(shouldRespondToMessage(msg({ guildId: 'g1', replyToBot: true }), { allowedUserIds: allowed })).toBe(true);
+    expect(shouldRespondToMessage(msg({ guildId: 'g1', content: 'hey doty' }), { allowedUserIds: allowed })).toBe(true);
+    expect(shouldRespondToMessage(msg({ guildId: 'g1', content: 'the BOT is here' }), { allowedUserIds: allowed })).toBe(true);
+    // Channel filter still applies.
+    expect(shouldRespondToMessage(msg({ guildId: 'g1', mentionedBot: true, channelId: 'c2' }), { allowedUserIds: allowed, channelId: 'c1' })).toBe(false);
+    // Custom trigger words.
+    expect(shouldRespondToMessage(msg({ guildId: 'g1', content: 'ping' }), { allowedUserIds: allowed, triggerWords: ['ping'] })).toBe(true);
+    expect(shouldRespondToMessage(msg({ guildId: 'g1', content: 'ping' }), { allowedUserIds: allowed, triggerWords: ['doty'] })).toBe(false);
   });
 });
