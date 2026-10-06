@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseVoiceCommand, SpeechMixer } from './voice.js';
+import { extractCommandArg, parseVoiceCommand, SpeechMixer } from './voice.js';
 
 describe('voice command parsing', () => {
   it('parses commands and strips leading trigger words', () => {
@@ -18,6 +18,12 @@ describe('voice command parsing', () => {
     expect(parseVoiceCommand('hola doty')).toBeNull();
     expect(parseVoiceCommand('')).toBeNull();
     expect(parseVoiceCommand('playlist')).toBeNull();
+  });
+
+  it('extracts the play/say argument when only the command type is known', () => {
+    expect(extractCommandArg('Doty quiero escuchar bachata')).toBe('bachata');
+    expect(extractCommandArg('doty pon lofi beats')).toBe('lofi beats');
+    expect(extractCommandArg('doty decime algo lindo')).toBe('algo lindo');
   });
 });
 

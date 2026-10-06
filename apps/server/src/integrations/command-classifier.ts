@@ -96,3 +96,78 @@ export async function classifyVoiceIntent(
     clearTimeout(timeout);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Jev (TypeSafe) — typed decision API: state + questions -> typed answers.
+// ---------------------------------------------------------------------------
+
+export interface JevConfig {
+  /** e.g. https://jevtypesafeai.com/api/v1/decide */
+  baseUrl: string;
+  apiKey: string;
+  /** Pin a version like `jev-1.13.0`; omit for the hosted default. */
+  model?: string;
+  timeoutMs?: number;
+}
+
+const JEV_CRITERIA: Record<string, string> = {
+  play: 'start or queue music; the song/artist/url is what should be played',
+  skip: 'go to the next track',
+  stop: 'leave the voice channel / disconnect',
+  pause: 'pause the music',
+  resume: 'resume the music',
+  queue: 'show what is currently queued',
+  join: 'join the voice channel',
+  say: 'speak the given text out loud',
+  none: 'not a command; conversation, a question, or a greeting',
+};
+
+/** Read `answers.command.choice` from a Jev response. */
+export function parseJevAnswer(body: unknown): VoiceCommand | null {
+  if (typeof body !== 'object' || body === null) return null;
+  const answers = (body as Record<string, unknown>).answers;
+  if (typeof answers !== 'object' || answers === null) return null;
+  const command = (answers as Record<string, unknown>).command;
+  if (typeof command !== 'object' || command === null) return null;
+  const choice = (command as Record<string, unknown>).choice;
+  if (typeof choice !== 'string' || !(COMMAND_NAMES as readonly string[]).includes(choice)) return null;
+  return { cmd: choice as VoiceCommandName };
+}
+
+/** Classify a message with the Jev typed-decision API. */
+export async function classifyVoiceIntentJev(
+  text: string,
+  config: JevConfig,
+  fetchImpl: typeof fetch = fetch,
+): Promise<VoiceCommand | null> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), config.timeoutMs ?? 15_000);
+  try {
+    const response = await fetchImpl(config.baseUrl, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json',
+        Authorization: `Bearer ${config.apiKey}`,
+      },
+      signal: controller.signal,
+      body: JSON.stringify({
+        ...(config.model ? { model: config.model } : {}),
+        state: text,
+        questions: {
+          command: {
+            type: 'choice',
+            instructions: 'Which music/voice command does the message ask for, if any?',
+            criteria: JEV_CRITERIA,
+          },
+        },
+      }),
+    });
+    if (!response.ok) return null;
+    return parseJevAnswer(await response.json());
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}

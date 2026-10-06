@@ -19,8 +19,8 @@ import { OpenAIChatProvider, openAIConfigFromEnv } from './provider/openai.js';
 import { PgEventLog } from './events/pg-log.js';
 import { AgentMemory, OpenAIEmbedder, embeddingConfigFromEnv, memoryStoreFromEnv } from './memory/index.js';
 import { parseAllowedUserIds, parseTriggerWords, startDiscordBot, type DiscordBot } from './integrations/discord.js';
-import { parseVoiceCommand, VoiceManager } from './integrations/voice.js';
-import { classifyVoiceIntent, type ClassifierConfig } from './integrations/command-classifier.js';
+import { extractCommandArg, parseVoiceCommand, VoiceManager } from './integrations/voice.js';
+import { classifyVoiceIntent, classifyVoiceIntentJev, type ClassifierConfig, type JevConfig } from './integrations/command-classifier.js';
 import { OpenCodeClient, parseOpenCodeModel } from './integrations/opencode.js';
 import { OpenCodeAgent } from './agent/opencode-agent.js';
 import { SessionStore } from './agent/sessions.js';
@@ -98,6 +98,15 @@ async function main(): Promise<void> {
         }
       : undefined;
     app.log.info(classifier ? `command classifier: ${classifier.model}` : 'command classifier: disabled');
+    const jevKey = process.env.JEV_API_KEY?.trim();
+    const jev: JevConfig | undefined = jevKey
+      ? {
+          baseUrl: process.env.JEV_BASE_URL?.trim() || 'https://jevtypesafeai.com/api/v1/decide',
+          apiKey: jevKey,
+          ...(process.env.JEV_MODEL?.trim() ? { model: process.env.JEV_MODEL.trim() } : {}),
+        }
+      : undefined;
+    app.log.info(jev ? 'jev classifier: enabled' : 'jev classifier: disabled');
     voice = new VoiceManager({
       log: (message) => app.log.info(message),
       ...(process.env.PIPER_BIN?.trim() ? { piperBin: process.env.PIPER_BIN.trim() } : {}),
@@ -118,10 +127,15 @@ async function main(): Promise<void> {
       onVoiceServerUpdate: (data) => voice?.onVoiceServerUpdate(data),
       onCommand: async (text, context) => {
         let command = parseVoiceCommand(text, triggerWords);
+        if (!command && jev) command = await classifyVoiceIntentJev(text, jev);
         if (!command && classifier && text.split(/\s+/).length <= 12) {
           command = await classifyVoiceIntent(text, classifier);
         }
         if (!command) return undefined;
+        if ((command.cmd === 'play' || command.cmd === 'say') && !command.arg) {
+          const arg = extractCommandArg(text, triggerWords);
+          if (arg) command = { cmd: command.cmd, arg };
+        }
         if (!context.guildId) return 'La voz solo funciona en servidores (no en DM).';
         const guildId = context.guildId;
         const channelId = voice?.channelOf(guildId, context.userId) ?? null;

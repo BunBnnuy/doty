@@ -74,6 +74,32 @@ export function parseVoiceCommand(text: string, triggerWords: readonly string[] 
   return { cmd, ...(arg ? { arg } : {}) };
 }
 
+const ARG_FILLERS: readonly RegExp[] = [
+  /^(quiero|quería|queria|quisiera|me\s+gustar[íi]a)\s+(escuchar|o[íi]r|que\s+pongas|que\s+toques|poner|tocar)\s+/i,
+  /^(pon|ponme|poner|reproduce|reproducir|play|toca|tocar|escuchar|o[íi]r)\s+/i,
+  /^(decime|dec[íi]|di|decir|habla|dime)\s+/i,
+  /^(la|el|una|un|de|del)\s+/i,
+];
+
+/** Best-effort song/text argument for `play`/`say` when only the command type is known. */
+export function extractCommandArg(text: string, triggerWords: readonly string[] = ['doty', 'bot']): string {
+  let value = text.trim();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const word of triggerWords) {
+      if (!word) continue;
+      const stripped = value.replace(new RegExp(`^${escapeRegExp(word)}\\b[:,]?\\s*`, 'i'), '');
+      if (stripped !== value) {
+        value = stripped;
+        changed = true;
+      }
+    }
+  }
+  for (const filler of ARG_FILLERS) value = value.replace(filler, '');
+  return value.trim();
+}
+
 function logChild(label: string, child: ChildProcess, onError?: (message: string) => void): void {
   child.stderr?.on('data', (chunk: Buffer) => {
     const line = chunk.toString().split('\n').find((item) => item.trim());
