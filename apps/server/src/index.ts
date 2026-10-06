@@ -20,6 +20,7 @@ import { PgEventLog } from './events/pg-log.js';
 import { AgentMemory, OpenAIEmbedder, embeddingConfigFromEnv, memoryStoreFromEnv } from './memory/index.js';
 import { parseAllowedUserIds, parseTriggerWords, startDiscordBot, type DiscordBot } from './integrations/discord.js';
 import { parseVoiceCommand, VoiceManager } from './integrations/voice.js';
+import { classifyVoiceIntent, type ClassifierConfig } from './integrations/command-classifier.js';
 import { OpenCodeClient, parseOpenCodeModel } from './integrations/opencode.js';
 import { OpenCodeAgent } from './agent/opencode-agent.js';
 import { SessionStore } from './agent/sessions.js';
@@ -86,6 +87,17 @@ async function main(): Promise<void> {
       app.log.warn('DISCORD_ALLOWED_USER_IDS is unset: Doty will answer any Discord user');
     }
     const triggerWords = parseTriggerWords(process.env.DISCORD_TRIGGER_WORDS);
+    const commandModel = process.env.COMMAND_MODEL?.trim() || process.env.OPENAI_MODEL?.trim();
+    const classifier: ClassifierConfig | undefined = commandModel && process.env.OPENAI_BASE_URL?.trim()
+      ? {
+          baseUrl: process.env.OPENAI_BASE_URL.trim(),
+          ...(process.env.OPENAI_API_KEY?.trim() ? { apiKey: process.env.OPENAI_API_KEY.trim() } : {}),
+          model: commandModel,
+          ...(process.env.OPENAI_USER_AGENT?.trim() ? { userAgent: process.env.OPENAI_USER_AGENT.trim() } : {}),
+          ...(process.env.OPENAI_SESSION_ID?.trim() ? { sessionId: process.env.OPENAI_SESSION_ID.trim() } : {}),
+        }
+      : undefined;
+    app.log.info(classifier ? `command classifier: ${classifier.model}` : 'command classifier: disabled');
     voice = new VoiceManager({
       log: (message) => app.log.info(message),
       ...(process.env.PIPER_BIN?.trim() ? { piperBin: process.env.PIPER_BIN.trim() } : {}),
@@ -105,7 +117,10 @@ async function main(): Promise<void> {
       onVoiceStateUpdate: (data) => voice?.onVoiceStateUpdate(data),
       onVoiceServerUpdate: (data) => voice?.onVoiceServerUpdate(data),
       onCommand: async (text, context) => {
-        const command = parseVoiceCommand(text, triggerWords);
+        let command = parseVoiceCommand(text, triggerWords);
+        if (!command && classifier && text.split(/\s+/).length <= 12) {
+          command = await classifyVoiceIntent(text, classifier);
+        }
         if (!command) return undefined;
         if (!context.guildId) return 'La voz solo funciona en servidores (no en DM).';
         const guildId = context.guildId;
