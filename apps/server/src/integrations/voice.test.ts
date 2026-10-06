@@ -9,6 +9,8 @@ describe('voice command parsing', () => {
     expect(parseVoiceCommand('DOTY STOP')).toEqual({ cmd: 'stop' });
     expect(parseVoiceCommand('doty bot pausa')).toEqual({ cmd: 'pause' });
     expect(parseVoiceCommand('queue')).toEqual({ cmd: 'queue' });
+    expect(parseVoiceCommand('doty join')).toEqual({ cmd: 'join' });
+    expect(parseVoiceCommand('doty di hola mundo')).toEqual({ cmd: 'say', arg: 'hola mundo' });
     expect(parseVoiceCommand('@doty reproduce algo', ['@doty'])).toEqual({ cmd: 'play', arg: 'algo' });
   });
 

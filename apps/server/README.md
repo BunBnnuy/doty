@@ -150,3 +150,8 @@ audio: `doty play <url|search>`, `doty skip`, `doty stop` (leave), `doty pause`,
 `doty resume`, `doty queue`. Requires `yt-dlp` and `ffmpeg` on the host plus the
 `@discordjs/voice` + `libsodium-wrappers` + `opusscript` dependencies. It uses the
 `GUILD_VOICE_STATES` intent to find your channel.
+
+**Speech (TTS).** When Doty is in a voice channel it also *speaks* its replies
+using local `piper`. `doty join` makes it join without music, and `doty say <text>`
+makes it say something. Configure `PIPER_BIN` (the piper executable) and
+`PIPER_VOICE` (an `.onnx` voice).

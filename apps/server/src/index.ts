@@ -86,7 +86,11 @@ async function main(): Promise<void> {
       app.log.warn('DISCORD_ALLOWED_USER_IDS is unset: Doty will answer any Discord user');
     }
     const triggerWords = parseTriggerWords(process.env.DISCORD_TRIGGER_WORDS);
-    voice = new VoiceManager({ log: (message) => app.log.info(message) });
+    voice = new VoiceManager({
+      log: (message) => app.log.info(message),
+      ...(process.env.PIPER_BIN?.trim() ? { piperBin: process.env.PIPER_BIN.trim() } : {}),
+      ...(process.env.PIPER_VOICE?.trim() ? { piperVoice: process.env.PIPER_VOICE.trim() } : {}),
+    });
     discord = startDiscordBot({
       token: discordToken,
       allowedUserIds: allowed,
@@ -95,28 +99,42 @@ async function main(): Promise<void> {
       onGatewayOpen: (send) => voice?.setGatewaySender(send),
       onVoiceStateUpdate: (data) => voice?.onVoiceStateUpdate(data),
       onVoiceServerUpdate: (data) => voice?.onVoiceServerUpdate(data),
-      onCommand: (text, context) => {
+      onCommand: async (text, context) => {
         const command = parseVoiceCommand(text, triggerWords);
         if (!command) return undefined;
-        if (!context.guildId) return 'La música solo funciona en servidores (no en DM).';
-        const channelId = voice?.channelOf(context.guildId, context.userId) ?? null;
+        if (!context.guildId) return 'La voz solo funciona en servidores (no en DM).';
+        const guildId = context.guildId;
+        const channelId = voice?.channelOf(guildId, context.userId) ?? null;
         if (command.cmd === 'play') {
           if (!channelId) return 'Entra a un canal de voz primero y luego pídeme la música.';
-          return voice?.play(context.guildId, channelId, command.arg ?? '');
+          return voice?.play(guildId, channelId, command.arg ?? '');
+        }
+        if (command.cmd === 'join') {
+          if (!channelId) return 'Entra a un canal de voz primero.';
+          return voice?.join(guildId, channelId);
+        }
+        if (command.cmd === 'say') {
+          if (!voice?.connected(guildId)) return 'Primero hazme entrar a un canal de voz (`doty join`).';
+          await voice.speak(guildId, command.arg ?? '');
+          return '';
         }
         switch (command.cmd) {
-          case 'skip': return voice?.skip(context.guildId);
-          case 'stop': return voice?.stop(context.guildId);
-          case 'pause': return voice?.pause(context.guildId);
-          case 'resume': return voice?.resume(context.guildId);
-          case 'queue': return voice?.queue(context.guildId);
+          case 'skip': return voice?.skip(guildId);
+          case 'stop': return voice?.stop(guildId);
+          case 'pause': return voice?.pause(guildId);
+          case 'resume': return voice?.resume(guildId);
+          case 'queue': return voice?.queue(guildId);
           default: return undefined;
         }
       },
       handle: async (text, context) => {
         eventLog.append({ type: 'message', data: { text } });
         const result = await runtime.run(text, context.conversationKey);
-        return result.answer ?? result.error ?? `No pude completar la tarea (${result.status}).`;
+        const reply = result.answer ?? result.error ?? `No pude completar la tarea (${result.status}).`;
+        if (context.guildId && voice?.connected(context.guildId)) {
+          void voice.speak(context.guildId, reply);
+        }
+        return reply;
       },
       log: (message) => app.log.info(message),
     });
