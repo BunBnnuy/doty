@@ -272,6 +272,12 @@ describe('integration routes', () => {
       });
       expect(missingState.statusCode).toBe(400);
 
+      const adminConsent = await app.inject({
+        method: 'GET',
+        url: '/integrations/google/callback?admin_consent=True',
+      });
+      expect(adminConsent.statusCode).toBe(200);
+
       const unknownProvider = await app.inject({
         method: 'POST',
         url: '/integrations/facebook/connect',

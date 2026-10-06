@@ -47,6 +47,8 @@ const callbackQuerySchema = z.object({
   code: z.string().min(1).optional(),
   state: z.string().min(1).optional(),
   error: z.string().optional(),
+  /** Microsoft appends this when an admin finishes the /adminconsent flow. */
+  admin_consent: z.string().optional(),
 });
 
 const listQuerySchema = z.object({
@@ -82,6 +84,14 @@ export function registerIntegrationRoutes(
     const query = callbackQuerySchema.safeParse(request.query);
     if (!provider || !query.success) {
       return sendPage(reply, 400, 'Enlace inválido', 'El enlace de conexión no es válido.');
+    }
+    if (query.data.admin_consent?.toLowerCase() === 'true') {
+      return sendPage(
+        reply,
+        200,
+        'Consentimiento concedido',
+        'Un administrador de tu organización autorizó a Doty. Ya puedes conectar tu cuenta desde Doty.',
+      );
     }
     if (query.data.error) {
       return sendPage(
