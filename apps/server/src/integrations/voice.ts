@@ -11,6 +11,7 @@
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { mkdirSync } from 'node:fs';
 import { unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join as joinPath } from 'node:path';
@@ -118,9 +119,27 @@ export interface TrackOptions {
 }
 
 export function createTrackStream(query: string, options: TrackOptions = {}, onError?: (message: string) => void): Readable {
-  // Users often paste URLs wrapped in <...>; strip those before URL detection.
+  const args = [...ytdlpArgs(options), '-o', '-', ytdlpTarget(query, options.search)];
+  const ytdlp = spawn('yt-dlp', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+  const ffmpeg = spawn(
+    'ffmpeg',
+    ['-hide_banner', '-loglevel', 'error', '-i', 'pipe:0', '-vn', '-f', 's16le', '-ar', '48000', '-ac', '2', 'pipe:1'],
+    { stdio: ['pipe', 'pipe', 'pipe'] },
+  );
+  ytdlp.stdout!.pipe(ffmpeg.stdin!);
+  logChild('yt-dlp', ytdlp, onError);
+  logChild('ffmpeg', ffmpeg, onError);
+  return ffmpeg.stdout!;
+}
+
+/** Users often paste URLs wrapped in <...>; strip those before URL detection. */
+function ytdlpTarget(query: string, search?: string): string {
   const cleaned = query.trim().replace(/^<+/, '').replace(/>+$/, '').trim();
-  const target = /^https?:\/\//i.test(cleaned) ? cleaned : `${options.search ?? 'ytsearch1:'}${cleaned}`;
+  return /^https?:\/\//i.test(cleaned) ? cleaned : `${search ?? 'ytsearch1:'}${cleaned}`;
+}
+
+/** yt-dlp flags shared by streaming and download. */
+function ytdlpArgs(options: TrackOptions): string[] {
   const args = [
     '-f', 'bestaudio/best',
     '--no-playlist',
@@ -133,15 +152,38 @@ export function createTrackStream(query: string, options: TrackOptions = {}, onE
   ];
   if (options.cookies) args.push('--cookies', options.cookies);
   if (options.extraArgs?.length) args.push(...options.extraArgs);
-  args.push('-o', '-', target);
-  const ytdlp = spawn('yt-dlp', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+  return args;
+}
+
+const TRACKS_DIR = joinPath(tmpdir(), 'doty-tracks');
+
+/** Download a track to a temp file (the playback buffer). Resolves with its path. */
+export function downloadTrack(query: string, options: TrackOptions = {}, onError?: (message: string) => void): Promise<string> {
+  return new Promise((resolve, reject) => {
+    try {
+      mkdirSync(TRACKS_DIR, { recursive: true });
+    } catch {
+      // Best effort.
+    }
+    const file = joinPath(TRACKS_DIR, `track-${randomUUID()}`);
+    const args = [...ytdlpArgs(options), '-o', file, ytdlpTarget(query, options.search)];
+    const child = spawn('yt-dlp', args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    logChild('yt-dlp', child, onError);
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code === 0) resolve(file);
+      else reject(new Error(`yt-dlp exited ${code}`));
+    });
+  });
+}
+
+/** ffmpeg -> raw PCM stream from a downloaded file. */
+export function createFileStream(file: string, onError?: (message: string) => void): Readable {
   const ffmpeg = spawn(
     'ffmpeg',
-    ['-hide_banner', '-loglevel', 'error', '-i', 'pipe:0', '-vn', '-f', 's16le', '-ar', '48000', '-ac', '2', 'pipe:1'],
-    { stdio: ['pipe', 'pipe', 'pipe'] },
+    ['-hide_banner', '-loglevel', 'error', '-i', file, '-vn', '-f', 's16le', '-ar', '48000', '-ac', '2', 'pipe:1'],
+    { stdio: ['ignore', 'pipe', 'pipe'] },
   );
-  ytdlp.stdout!.pipe(ffmpeg.stdin!);
-  logChild('yt-dlp', ytdlp, onError);
   logChild('ffmpeg', ffmpeg, onError);
   return ffmpeg.stdout!;
 }
@@ -253,6 +295,10 @@ export class VoiceManager {
   readonly #guilds = new Map<string, GuildPlayer>();
   readonly #adapters = new Map<string, DiscordGatewayAdapterLibraryMethods>();
   readonly #voiceChannels = new Map<string, string | null>();
+  /** Downloaded track files, keyed by query (the playback buffer). */
+  readonly #cache = new Map<string, string>();
+  /** In-flight downloads, so the same track is not fetched twice. */
+  readonly #downloads = new Map<string, Promise<string>>();
   readonly #log: (message: string) => void;
   readonly #piperBin: string;
   readonly #piperVoice: string;
@@ -361,14 +407,48 @@ export class VoiceManager {
     return guild;
   }
 
-  #start(guild: GuildPlayer, query: string): void {
-    guild.current = query;
+  /** Download (or reuse) the audio buffer for a query. */
+  #ensureFile(query: string): Promise<string> {
+    const cached = this.#cache.get(query);
+    if (cached) return Promise.resolve(cached);
+    const inFlight = this.#downloads.get(query);
+    if (inFlight) return inFlight;
+    const pending = downloadTrack(query, this.#track, (message) => this.#log(`voice: ${message}`))
+      .then((file) => {
+        this.#cache.set(query, file);
+        this.#downloads.delete(query);
+        this.#trimCache();
+        return file;
+      })
+      .catch((error: unknown) => {
+        this.#downloads.delete(query);
+        throw error;
+      });
+    this.#downloads.set(query, pending);
+    return pending;
+  }
+
+  /** Keep the downloaded-track cache bounded (delete the oldest files). */
+  #trimCache(): void {
+    while (this.#cache.size > 15) {
+      const oldest = this.#cache.keys().next().value;
+      if (oldest === undefined) break;
+      const file = this.#cache.get(oldest);
+      this.#cache.delete(oldest);
+      if (file) void unlink(file).catch(() => undefined);
+    }
+  }
+
+  /** Play a downloaded track and prefetch the next queued one. */
+  async #start(guild: GuildPlayer, query: string): Promise<void> {
+    const file = await this.#ensureFile(query);
     this.#log(`voice: start (queue=${guild.queue.length})`);
     const mixer = new SpeechMixer();
     guild.mixer = mixer;
-    const stream = createTrackStream(query, this.#track, (message) => this.#log(`voice: ${message}`));
-    stream.pipe(mixer);
+    createFileStream(file, (message) => this.#log(`voice: ${message}`)).pipe(mixer);
     guild.player.play(createAudioResource(mixer, { inputType: StreamType.Raw }));
+    const next = guild.queue[0];
+    if (next) void this.#ensureFile(next).catch(() => undefined);
   }
 
   async #next(guildId: string): Promise<void> {
@@ -382,7 +462,13 @@ export class VoiceManager {
       return;
     }
     this.#log(`voice: next from queue (remaining=${guild.queue.length})`);
-    this.#start(guild, next);
+    guild.current = next;
+    try {
+      await this.#start(guild, next);
+    } catch {
+      guild.current = undefined;
+      void this.#next(guildId);
+    }
   }
 
   /** Join the given voice channel without playing anything. */
@@ -397,9 +483,17 @@ export class VoiceManager {
     this.#log(`voice: play (current=${guild.current ? 'yes' : 'no'} queue=${guild.queue.length})`);
     if (guild.current) {
       guild.queue.push(query);
+      void this.#ensureFile(query).catch(() => undefined);
       return `Encolado (posición ${guild.queue.length}): ${query}`;
     }
-    this.#start(guild, query);
+    guild.current = query;
+    try {
+      await this.#start(guild, query);
+    } catch (error) {
+      guild.current = undefined;
+      this.#log(`voice: could not start (${error instanceof Error ? error.message.slice(0, 100) : 'unknown'})`);
+      return `No pude reproducir «${query}». Probá con otra búsqueda o un link.`;
+    }
     return `Reproduciendo: ${query}`;
   }
 
@@ -489,5 +583,7 @@ export class VoiceManager {
       if (guild.speechTemp) void unlink(guild.speechTemp).catch(() => undefined);
     }
     this.#guilds.clear();
+    for (const file of this.#cache.values()) void unlink(file).catch(() => undefined);
+    this.#cache.clear();
   }
 }
