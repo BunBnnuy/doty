@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseVoiceCommand } from './voice.js';
+import { parseVoiceCommand, SpeechMixer } from './voice.js';
 
 describe('voice command parsing', () => {
   it('parses commands and strips leading trigger words', () => {
@@ -18,5 +18,35 @@ describe('voice command parsing', () => {
     expect(parseVoiceCommand('hola doty')).toBeNull();
     expect(parseVoiceCommand('')).toBeNull();
     expect(parseVoiceCommand('playlist')).toBeNull();
+  });
+});
+
+describe('SpeechMixer', () => {
+  const frame = (value: number): Buffer => {
+    const buffer = Buffer.alloc(4);
+    buffer.writeInt16LE(value, 0);
+    buffer.writeInt16LE(value, 2);
+    return buffer;
+  };
+
+  it('passes music through unchanged when not speaking', () => {
+    const mixer = new SpeechMixer(0.5);
+    const chunks: Buffer[] = [];
+    mixer.on('data', (chunk: Buffer) => chunks.push(chunk));
+    mixer.write(frame(1000));
+    const out = Buffer.concat(chunks);
+    expect(out.readInt16LE(0)).toBe(1000);
+  });
+
+  it('sums speech over ducked music while speaking', () => {
+    const mixer = new SpeechMixer(0.5);
+    const chunks: Buffer[] = [];
+    mixer.on('data', (chunk: Buffer) => chunks.push(chunk));
+    mixer.feed(frame(500));
+    mixer.write(frame(1000));
+    const out = Buffer.concat(chunks);
+    // 1000 * 0.5 (ducked) + 500 (speech) = 1000
+    expect(out.readInt16LE(0)).toBe(1000);
+    expect(mixer.speaking).toBe(false);
   });
 });

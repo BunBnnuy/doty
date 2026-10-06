@@ -2,12 +2,11 @@
  * Discord voice: music + text-to-speech.
  *
  * Connects to a voice channel with `@discordjs/voice` through a small adapter
- * over Doty's raw gateway. Music streams YouTube audio via `yt-dlp` piped into
- * `ffmpeg`; speech is synthesized locally with `piper` and played through a
- * second audio player (pausing/resuming music).
+ * over Doty's raw gateway. Music streams YouTube/SoundCloud audio via `yt-dlp`
+ * piped into `ffmpeg`; speech is synthesized locally with `piper`.
  *
- * Commands are parsed from the message text (`play`/`skip`/`stop`/`pause`/
- * `resume`/`queue`/`join`/`say`, English + Spanish aliases).
+ * Speech is mixed *over* the music in real time (the music keeps playing, ducked
+ * while Doty talks) instead of pausing it.
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -15,7 +14,7 @@ import { randomUUID } from 'node:crypto';
 import { unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join as joinPath } from 'node:path';
-import type { Readable } from 'node:stream';
+import { Transform, type Readable } from 'node:stream';
 import {
   AudioPlayerStatus,
   StreamType,
@@ -143,6 +142,52 @@ export function synthesizeSpeech(
   });
 }
 
+/**
+ * Sums an optional speech PCM stream into the music PCM in real time. While
+ * speech is buffered, the music is ducked so the voice is audible over it.
+ */
+export class SpeechMixer extends Transform {
+  readonly #duck: number;
+  #speech: Buffer = Buffer.alloc(0);
+
+  constructor(duck = 0.35) {
+    super();
+    this.#duck = duck;
+  }
+
+  feed(chunk: Buffer): void {
+    // Keep at most ~2 s of speech buffered.
+    const combined = this.#speech.length === 0 ? chunk : Buffer.concat([this.#speech, chunk]);
+    this.#speech = combined.length > 384_000 ? combined.subarray(combined.length - 384_000) : combined;
+  }
+
+  get speaking(): boolean {
+    return this.#speech.length > 0;
+  }
+
+  override _transform(
+    chunk: Buffer,
+    _encoding: BufferEncoding,
+    callback: (error?: Error | null, data?: Buffer) => void,
+  ): void {
+    const out = Buffer.from(chunk);
+    if (this.#speech.length > 0) {
+      const take = Math.min(out.length, this.#speech.length) & ~1;
+      for (let i = 0; i < take; i += 2) {
+        const music = Math.round(out.readInt16LE(i) * this.#duck);
+        const mixed = music + this.#speech.readInt16LE(i);
+        out.writeInt16LE(Math.max(-32768, Math.min(32767, mixed)), i);
+      }
+      this.#speech = this.#speech.subarray(take);
+      // Duck the rest of this chunk while the voice is still going.
+      for (let i = take; i < out.length - 1; i += 2) {
+        out.writeInt16LE(Math.round(out.readInt16LE(i) * this.#duck), i);
+      }
+    }
+    callback(null, out);
+  }
+}
+
 interface GuildPlayer {
   connection: VoiceConnection;
   player: AudioPlayer;
@@ -150,8 +195,8 @@ interface GuildPlayer {
   queue: string[];
   current?: string;
   channelId: string;
+  mixer?: SpeechMixer;
   speechTemp?: string;
-  musicPausedForSpeech: boolean;
 }
 
 export interface VoiceManagerOptions {
@@ -253,7 +298,7 @@ export class VoiceManager {
     });
     const player = createAudioPlayer();
     const speech = createAudioPlayer();
-    const guild: GuildPlayer = { connection, player, speech, queue: [], channelId, musicPausedForSpeech: false };
+    const guild: GuildPlayer = { connection, player, speech, queue: [], channelId };
     this.#guilds.set(guildId, guild);
     connection.subscribe(player);
     player.on(AudioPlayerStatus.Idle, () => void this.#next(guildId));
@@ -262,12 +307,6 @@ export class VoiceManager {
       void this.#next(guildId);
     });
     speech.on(AudioPlayerStatus.Idle, () => {
-      // Restore music after a spoken line.
-      try { connection.subscribe(player); } catch { /* ignore */ }
-      if (guild.musicPausedForSpeech) {
-        guild.musicPausedForSpeech = false;
-        try { player.unpause(); } catch { /* ignore */ }
-      }
       const temp = guild.speechTemp;
       guild.speechTemp = undefined;
       if (temp) void unlink(temp).catch(() => undefined);
@@ -284,8 +323,11 @@ export class VoiceManager {
 
   #start(guild: GuildPlayer, query: string): void {
     guild.current = query;
+    const mixer = new SpeechMixer();
+    guild.mixer = mixer;
     const stream = createTrackStream(query, this.#track, (message) => this.#log(`voice: ${message}`));
-    guild.player.play(createAudioResource(stream, { inputType: StreamType.Raw }));
+    stream.pipe(mixer);
+    guild.player.play(createAudioResource(mixer, { inputType: StreamType.Raw }));
   }
 
   async #next(guildId: string): Promise<void> {
@@ -294,6 +336,7 @@ export class VoiceManager {
     const next = guild.queue.shift();
     if (!next) {
       guild.current = undefined;
+      guild.mixer = undefined;
       return;
     }
     this.#start(guild, next);
@@ -332,20 +375,24 @@ export class VoiceManager {
       void unlink(wav).catch(() => undefined);
       return;
     }
-    if (guild.musicPausedForSpeech) {
-      // Already speaking; just replace the audio.
-      guild.speech.stop();
-    } else if (guild.player.state.status === AudioPlayerStatus.Playing) {
-      guild.musicPausedForSpeech = true;
-      try { guild.player.pause(); } catch { /* ignore */ }
+    const tts = createWavStream(wav, (message) => this.#log(`voice: ${message}`));
+    // Music playing: mix the voice over it (music keeps playing, ducked).
+    if (guild.mixer && guild.player.state.status === AudioPlayerStatus.Playing) {
+      const mixer = guild.mixer;
+      tts.on('data', (chunk: Buffer) => mixer.feed(chunk));
+      tts.on('end', () => void unlink(wav).catch(() => undefined));
+      tts.on('error', () => void unlink(wav).catch(() => undefined));
+      return;
     }
+    // Nothing playing: use the dedicated speech player.
     const previous = guild.speechTemp;
     guild.speechTemp = wav;
     if (previous) void unlink(previous).catch(() => undefined);
     try { guild.connection.subscribe(guild.speech); } catch { /* ignore */ }
-    guild.speech.play(createAudioResource(createWavStream(wav, (m) => this.#log(`voice: ${m}`)), {
-      inputType: StreamType.Raw,
-    }));
+    guild.speech.play(createAudioResource(tts, { inputType: StreamType.Raw }));
+    guild.speech.once(AudioPlayerStatus.Idle, () => {
+      try { guild.connection.subscribe(guild.player); } catch { /* ignore */ }
+    });
   }
 
   skip(guildId: string): string {
@@ -383,6 +430,7 @@ export class VoiceManager {
     if (!guild) return 'No estoy en un canal de voz.';
     guild.queue.length = 0;
     guild.current = undefined;
+    guild.mixer = undefined;
     try { guild.player.stop(true); } catch { /* ignore */ }
     try { guild.speech.stop(true); } catch { /* ignore */ }
     try { guild.connection.destroy(); } catch { /* ignore */ }
