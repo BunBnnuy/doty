@@ -26,4 +26,17 @@ const png = Buffer.from(await (await request('/screenshot')).arrayBuffer());
 if (png.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a' || png.readUInt32BE(16) !== 1280 || png.readUInt32BE(20) !== 720)
   throw new Error('Desktop screenshot failed');
 await request('/action', { action: 'scroll', direction: 'down' });
-console.log('browser smoke: auth, HTTPS navigation, accessibility, 1280x720 desktop screenshot, and input passed');
+await request('/action', { action: 'click', x: 100, y: 120 });
+await request('/action', { action: 'key', key: 'ctrl+l' });
+await request('/action', { action: 'type', text: 'https://example.net' });
+await request('/action', { action: 'key', key: 'Return' });
+let typedNavigation = false;
+for (let attempt = 0; attempt < 10; attempt++) {
+  const snapshot = await (await request('/snapshot')).json();
+  if (snapshot.url?.startsWith('https://example.net') && JSON.stringify(snapshot.nodes).includes('Example Domain')) {
+    typedNavigation = true; break;
+  }
+  await new Promise(r => setTimeout(r, 1000));
+}
+if (!typedNavigation) throw new Error('Desktop key or text input failed');
+console.log('browser smoke: auth, HTTPS navigation, accessibility, 1280x720 screenshot, click, scroll, typing and keys passed');

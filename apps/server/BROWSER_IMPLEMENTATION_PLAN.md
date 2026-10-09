@@ -1,9 +1,19 @@
 # Doty browser and desktop implementation plan
 
-Date: 2026-10-09. Status: implementation started after the user approved a
+Date: 2026-10-09. Status: deployed after the user approved a
 light browser and graphical environment and rejected a separate VM.
 The current implementation and setup are documented in browser-worker/README.md.
 The sections below preserve the initial resource review and staged plan.
+
+Verified on kb: Chromium's sandbox is enabled; real HTTPS navigation,
+accessibility text, a 1280x720 desktop screenshot, and input work. A restricted
+DeepSeek vision planner opened example.org and reported the real heading and
+source URL. Direct internet, host API, loopback and metadata access from the
+worker are blocked. API health is 200, and the private browser API rejects
+requests without the owner token. Local type checks and 195 tests passed.
+The basic-page sample used about 276 MiB for the worker and 42 MiB for the proxy.
+This is not a complex-site or peak-load measurement. Private account login and
+the owner's end-to-end Discord command were not tested.
 
 ## Decision
 
