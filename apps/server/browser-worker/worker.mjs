@@ -4,6 +4,7 @@ import { promisify } from 'node:util';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { unlink } from 'node:fs/promises';
 import { downloadObservedImage, publicURL, inlineImage } from './images.mjs';
+import { CDP, BrowserFailure, retryRead, waitForPage } from './reliability.mjs';
 const token = process.env.BROWSER_WORKER_TOKEN;
 if (!token) throw new Error('Worker authentication is required');
 const exec = promisify(execFile);
@@ -38,43 +39,6 @@ start('chromium', ['--user-data-dir=/home/browser/profile', '--remote-debugging-
   '--proxy-server=http://egress:8080', '--proxy-bypass-list=<-loopback>',
   '--window-size=1280,720', '--start-maximized', 'about:blank']);
 
-class CDP {
-  id = 0; pending = new Map();
-  async connect() {
-    const targets = await (await fetch('http://127.0.0.1:9222/json/list')).json();
-    const target = targets.find((t) => t.type === 'page');
-    if (!target) throw new Error('Browser is not ready');
-    if (this.ws?.readyState === 1 && this.target === target.id) return;
-    this.ws?.close(); this.target = target.id;
-    this.ws = new WebSocket(target.webSocketDebuggerUrl);
-    await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('Browser connection timeout')), 5000);
-      this.ws.addEventListener('open', () => { clearTimeout(timer); resolve(); }, { once: true });
-      this.ws.addEventListener('error', () => { clearTimeout(timer); reject(new Error('Browser connection failed')); }, { once: true });
-    });
-    this.ws.addEventListener('message', ({ data }) => {
-      const answer = JSON.parse(data);
-      const pending = this.pending.get(answer.id);
-      if (!pending) return;
-      this.pending.delete(answer.id); clearTimeout(pending.timer);
-      if (answer.error) pending.reject(new Error('Browser command failed'));
-      else pending.resolve(answer.result);
-    });
-    this.ws.addEventListener('close', () => {
-      for (const pending of this.pending.values()) { clearTimeout(pending.timer); pending.reject(new Error('Browser disconnected')); }
-      this.pending.clear();
-    });
-  }
-  async call(method, params = {}) {
-    await this.connect();
-    const id = ++this.id;
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('Browser command timeout')); }, 10_000);
-      this.pending.set(id, { resolve, reject, timer });
-      this.ws.send(JSON.stringify({ id, method, params }));
-    });
-  }
-}
 const cdp = new CDP();
 let observedLinks = [], observedImages = [], observedURL;
 async function observation() {
@@ -96,6 +60,7 @@ async function observation() {
         source:img.closest('a')?.href || location.href,title:img.alt.slice(0,250)});
       return {links,images:images.slice(0,200)};
     })()` });
+  if (result.exceptionDetails) throw new BrowserFailure('CDP_CONTEXT_LOST', 'Runtime.evaluate');
   const data = result.result?.value || {};
   const unique = (items, max, allowInline = false) => {
     const seen = new Set(), accepted = [];
@@ -118,7 +83,12 @@ async function observation() {
     url: item.url.startsWith('data:') ? 'Embedded page image' : item.url,
     ...(item.preview?.startsWith('data:') ? { preview: 'Embedded page preview' } : {}) })) };
 }
-async function screenshot() {
+let screenshotFlight;
+function screenshot() {
+  if (!screenshotFlight) screenshotFlight = captureScreenshot().finally(() => { screenshotFlight = undefined; });
+  return screenshotFlight;
+}
+async function captureScreenshot() {
   const { stdout } = await exec('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-f', 'x11grab',
     '-video_size', '1280x720', '-i', ':99', '-frames:v', '1', '-threads', '1', '-filter_threads', '1', '-f', 'image2pipe', '-vcodec', 'png', 'pipe:1'],
   { encoding: 'buffer', maxBuffer: 4 * 1024 * 1024, timeout: 10_000 });
@@ -132,22 +102,23 @@ const keys = new Set(['Return', 'Tab', 'Escape', 'BackSpace', 'Delete', 'Up', 'D
   'Home', 'End', 'Page_Up', 'Page_Down', 'ctrl+a', 'ctrl+c', 'ctrl+v', 'ctrl+l']);
 export async function action(input) {
   if (!input || typeof input !== 'object') throw new Error('Invalid action');
+  let navigation;
   if (input.action === 'navigate') {
     const url = new URL(input.url);
     if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.href.length > 4096)
       throw new Error('Only public web URLs are permitted');
-    await cdp.call('Page.navigate', { url: url.href });
+    navigation = await cdp.call('Page.navigate', { url: url.href });
   } else if (input.action === 'search') {
     if (typeof input.query !== 'string' || !input.query.trim() || input.query.length > 1000) throw new Error('Invalid query');
     const url = new URL('https://www.google.com/search');
     url.searchParams.set('q', input.query);
     if (input.images) url.searchParams.set('udm', '2');
-    await cdp.call('Page.navigate', { url: url.href });
+    navigation = await cdp.call('Page.navigate', { url: url.href });
   } else if (input.action === 'open_link') {
     const history = await cdp.call('Page.getNavigationHistory');
     if (history.entries[history.currentIndex]?.url !== observedURL || !Number.isInteger(input.id) || !observedLinks[input.id])
       throw new Error('Stale or invalid link');
-    await cdp.call('Page.navigate', { url: observedLinks[input.id].url });
+    navigation = await cdp.call('Page.navigate', { url: observedLinks[input.id].url });
   } else if (input.action === 'click') {
     await exec('xdotool', ['mousemove', number(input.x, 1279), number(input.y, 719), 'click', '1']);
   } else if (input.action === 'type') {
@@ -167,7 +138,16 @@ export async function action(input) {
   } else if (input.action === 'wait') {
     await new Promise((r) => setTimeout(r, 1500));
   } else throw new Error('Unknown action');
-  await new Promise((r) => setTimeout(r, 500));
+  if (navigation) {
+    if (navigation.errorText) throw new BrowserFailure('NAVIGATION_FAILED', 'Page.navigate');
+    try { await waitForPage(cdp, 12_000, navigation.loaderId); }
+    catch (error) {
+      if (error.code !== 'PAGE_LOADING') throw error;
+      // Navigation already happened. Let the next read recover; never send it twice.
+      return { ok: true, pageReady: false };
+    }
+  }
+  else await new Promise((r) => setTimeout(r, 250));
   return { ok: true };
 }
 const server = http.createServer(async (req, res) => {
@@ -185,14 +165,23 @@ const server = http.createServer(async (req, res) => {
       res.end(png); return;
     }
     if (req.url === '/snapshot' && req.method === 'GET') {
-      const tree = await cdp.call('Accessibility.getFullAXTree');
-      const history = await cdp.call('Page.getNavigationHistory');
-      const page = history.entries[history.currentIndex];
-      observedURL = page?.url;
-      const items = await observation();
-      const nodes = tree.nodes.filter((node) => !node.ignored && node.name?.value)
-        .slice(0, 200).map((node) => ({ role: node.role?.value, name: String(node.name.value).slice(0, 500) }));
-      res.end(JSON.stringify({ url: page?.url, title: page?.title, nodes, ...items })); return;
+      const deadline = Date.now() + 30_000;
+      const snapshot = await retryRead(async () => {
+        if (Date.now() >= deadline) throw new BrowserFailure('PAGE_LOADING');
+        await waitForPage(cdp, Math.min(12_000, deadline - Date.now()));
+        const before = await cdp.call('Page.getFrameTree');
+        const tree = await cdp.call('Accessibility.getFullAXTree');
+        const history = await cdp.call('Page.getNavigationHistory');
+        const page = history.entries[history.currentIndex];
+        const items = await observation();
+        const after = await cdp.call('Page.getFrameTree');
+        if (before.frameTree.frame.loaderId !== after.frameTree.frame.loaderId) throw new BrowserFailure('CDP_CONTEXT_LOST');
+        observedURL = page?.url;
+        const nodes = tree.nodes.filter(node => !node.ignored && node.name?.value)
+          .slice(0, 200).map(node => ({ role: node.role?.value, name: String(node.name.value).slice(0, 500) }));
+        return { url: page?.url, title: page?.title, nodes, ...items };
+      });
+      res.end(JSON.stringify(snapshot)); return;
     }
     if (['/action', '/image'].includes(req.url) && req.method === 'POST') {
       let text = '';
@@ -211,7 +200,13 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify(await action(input))); return;
     }
     res.writeHead(404); res.end();
-  } catch { res.writeHead(503); res.end(JSON.stringify({ error: 'Workspace operation failed' })); }
+  } catch (error) {
+    const code = error instanceof BrowserFailure ? error.code : 'WORKER_OPERATION_FAILED';
+    const operation = ['/health', '/screenshot', '/snapshot', '/action', '/image'].includes(req.url) ? req.url : 'unknown';
+    console.error(JSON.stringify({ event: 'browser_worker_error', operation, code,
+      ...(error instanceof BrowserFailure ? { method: error.method, protocolCode: error.protocolCode } : {}) }));
+    res.writeHead(503); res.end(JSON.stringify({ error: code }));
+  }
 });
 server.listen(8890, '0.0.0.0');
 for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, async () => {

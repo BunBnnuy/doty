@@ -17,6 +17,11 @@ Doty uses a fresh OpenCode planning session for each step, with all tool permiss
 Each step includes the current page, one screenshot and recent actions. The model
 has up to 180 seconds to reply; old screenshots do not accumulate in its context.
 Only the first validated action object is used if the provider adds extra prose.
+Navigation waits for the new document to be ready and stable. Temporary page-read
+and connection errors have bounded retries. Concurrent requests share one Chromium
+connection and one screenshot capture. Clicks and typing are never replayed.
+Technical error logs contain operation names and error codes, without page content,
+queries, URLs or credentials. Failed tasks report the operation and code in the DM.
 It sees a desktop screenshot and page accessibility text. It can navigate and
 read, search, and open observed public links automatically. Every generic click, key press, and typing action needs approval in
 the browser page. Review the visible page and pending action before approval.

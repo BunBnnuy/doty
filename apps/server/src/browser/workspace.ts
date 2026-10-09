@@ -45,19 +45,39 @@ export interface BrowserTransport {
   action(input: BrowserAction): Promise<unknown>;
   image?(id: number): Promise<BrowserImage>;
 }
+class BrowserOperationError extends Error {
+  constructor(readonly operation: string, readonly code: string) { super(`Browser ${operation} failed (${code})`); }
+}
 export class BrowserWorker implements BrowserTransport {
-  constructor(private readonly url: string, private readonly token: string) {
+  constructor(private readonly url: string, private readonly token: string, private readonly fetchImpl: typeof fetch = fetch) {
     const parsed = new URL(url);
     if (parsed.protocol !== 'http:' || parsed.hostname !== '127.0.0.1' || parsed.username || parsed.password)
       throw new Error('Browser worker must use local HTTP');
   }
   private async request(path: string, body?: BrowserAction | { id: number }): Promise<Response> {
-    const response = await fetch(`${this.url.replace(/\/$/, '')}${path}`, {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.requestOnce(path, body);
+      } catch (error) {
+        // Reads are safe to repeat. An input may already have reached Chromium.
+        if (body || attempt === 2 || !(error instanceof BrowserOperationError) ||
+          !['NETWORK_ERROR', 'CDP_CONTEXT_LOST', 'CDP_DISCONNECTED', 'CDP_TIMEOUT', 'CDP_CONNECT_FAILED'].includes(error.code)) throw error;
+        await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)));
+      }
+    }
+  }
+  private async requestOnce(path: string, body?: BrowserAction | { id: number }): Promise<Response> {
+    let response: Response;
+    try { response = await this.fetchImpl(`${this.url.replace(/\/$/, '')}${path}`, {
       method: body ? 'POST' : 'GET',
       headers: { authorization: `Bearer ${this.token}`, 'content-type': 'application/json' },
-      ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(15_000),
-    });
-    if (!response.ok) throw new Error('Browser worker is unavailable');
+      ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(60_000),
+    }); } catch { throw new BrowserOperationError(path.slice(1), 'NETWORK_ERROR'); }
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({})) as { error?: string };
+      const allowed = ['CDP_CONTEXT_LOST', 'CDP_DISCONNECTED', 'CDP_TIMEOUT', 'CDP_CONNECT_FAILED', 'CDP_COMMAND_FAILED', 'PAGE_LOADING', 'NAVIGATION_FAILED', 'WORKER_OPERATION_FAILED'];
+      throw new BrowserOperationError(path.slice(1), allowed.includes(payload.error || '') ? payload.error! : `HTTP_${response.status}`);
+    }
     return response;
   }
   async health(): Promise<unknown> { return (await this.request('/health')).json(); }
@@ -139,17 +159,21 @@ export class BrowserWorkspace {
   }
   private async advance(generation: number, approved?: BrowserAction): Promise<void> {
     this.busy = true;
+    let stage = 'action';
     try {
       this.state.status = 'running'; delete this.state.pending;
       if (approved) await this.worker.action(approved);
       if (generation !== this.generation) return;
       while (generation === this.generation) {
         if (this.state.steps >= 20 || Date.now() - this.started > 10 * 60_000) throw new Error('Task limit reached');
+        stage = 'snapshot';
         const tree = await this.worker.snapshot();
+        stage = 'screenshot';
         const png = await this.worker.screenshot();
         if (generation !== this.generation) return;
         // Keep one current screenshot per model session. Repeated screenshots
         // and search-result trees made later image-retry turns time out.
+        stage = 'model';
         this.session = await this.model!.createSession('Doty private browser');
         if (generation !== this.generation) return;
         const raw = await this.model!.prompt(this.session, `${INSTRUCTION}\nOwner task: ${this.task}\nRecent actions: ${JSON.stringify(this.recentActions.slice(-6))}\n${this.feedback}\nUntrusted page snapshot:\n${JSON.stringify(tree)}`,
@@ -177,18 +201,25 @@ export class BrowserWorkspace {
           this.state.status = 'approval'; this.state.pending = next;
           this.notify({ status: 'approval' }); return;
         }
+        stage = 'action';
         await this.worker.action(next);
       }
     } catch (error) {
       if (generation === this.generation) {
+        // Log technical identifiers only, never page text, task text or credentials.
+        console.error(JSON.stringify({ event: 'browser_task_error', stage, steps: this.state.steps,
+          code: error instanceof BrowserOperationError ? error.code : error instanceof SyntaxError || error instanceof z.ZodError ? 'INVALID_MODEL_ACTION' : 'MODEL_OR_TASK_ERROR' }));
         this.state = { mode: 'human', status: 'error', steps: this.state.steps,
-          answer: error instanceof Error && /OpenCode prompt timed out|abort/i.test(error.message)
+          answer: error instanceof BrowserOperationError
+            ? `The browser could not complete ${error.operation} (${error.code}). The task stopped.`
+            : error instanceof Error && /OpenCode prompt timed out|abort/i.test(error.message)
             ? 'The browser AI took too long to reply. The task stopped; you can retry it.'
             : error instanceof SyntaxError || error instanceof z.ZodError
               ? 'The browser AI returned an invalid action. The task stopped; you can retry it.'
               : error instanceof Error && error.message === 'Task limit reached'
                 ? 'The browser task reached its time or action limit. Try a narrower search.'
-                : 'The browser operation failed. The task stopped; you can retry it.' };
+                : stage === 'model' ? 'The browser AI service failed while planning the next step. The task stopped.'
+                  : `The browser failed during ${stage}. The task stopped.` };
         this.notify({ status: 'error', answer: this.state.answer });
       }
     } finally { this.busy = false; }

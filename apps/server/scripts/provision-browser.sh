@@ -2,7 +2,7 @@
 # Called by the versioned deploy script on kb. Never run through ad-hoc SSH.
 set -euo pipefail
 cd /home/ubuntu/doty
-node --test apps/server/browser-worker/egress-check.mjs apps/server/browser-worker/images-check.mjs
+node --test apps/server/browser-worker/egress-check.mjs apps/server/browser-worker/images-check.mjs apps/server/browser-worker/reliability-check.mjs
 if ! command -v docker >/dev/null; then
   sudo -n apt-get update -qq
   sudo -n apt-get install -y ca-certificates curl

@@ -3,7 +3,7 @@ const root = process.env.BROWSER_WORKER_URL || 'http://127.0.0.1:8890';
 const headers = { authorization: `Bearer ${process.env.BROWSER_WORKER_TOKEN}`, 'content-type': 'application/json' };
 const request = async (path, body) => {
   const result = await fetch(root + path, { headers, method: body ? 'POST' : 'GET',
-    ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(15_000) });
+    ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(60_000) });
   if (!result.ok) throw new Error(`Browser smoke ${path}: ${result.status}`);
   return result;
 };
@@ -40,3 +40,12 @@ for (let attempt = 0; attempt < 10; attempt++) {
 }
 if (!typedNavigation) throw new Error('Desktop key or text input failed');
 console.log('browser smoke: auth, HTTPS navigation, accessibility, 1280x720 screenshot, click, scroll, typing and keys passed');
+for (const query of ['Tibo reset Codex Twitter', 'goldship y sus papas meme', 'example domain']) {
+  await request('/action', { action: 'search', query });
+  const [page, health, screenshot] = await Promise.all([
+    request('/snapshot').then(response => response.json()), request('/health'), request('/screenshot')
+  ]);
+  if (!page.url?.startsWith('https://www.google.com/search?') || !page.nodes?.length || !health.ok || !screenshot.ok)
+    throw new Error('Google navigation or concurrent browser reads failed');
+}
+console.log('browser recovery smoke: three Google searches and concurrent page, health and screenshot reads passed');

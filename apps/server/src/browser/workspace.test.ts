@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../app.js';
-import { BrowserWorkspace, browserAction, type BrowserTransport } from './workspace.js';
+import { BrowserWorker, BrowserWorkspace, browserAction, type BrowserTransport } from './workspace.js';
 import { OpenCodeClient } from '../integrations/opencode.js';
 
 function worker(): BrowserTransport {
@@ -8,6 +8,20 @@ function worker(): BrowserTransport {
     snapshot: vi.fn(async () => ({ nodes: [{ name: 'Untrusted page' }] })), action: vi.fn(async () => ({ ok: true })) };
 }
 describe('private browser workspace', () => {
+  it('recovers a temporary page-read failure without repeating input or authentication failures', async () => {
+    const calls = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response('{"error":"CDP_CONTEXT_LOST"}', { status: 503 }))
+      .mockResolvedValueOnce(new Response('{"nodes":[{"name":"ready"}]}'));
+    const transport = new BrowserWorker('http://127.0.0.1:8890', 'private', calls);
+    expect(await transport.snapshot()).toEqual({ nodes: [{ name: 'ready' }] });
+    expect(calls).toHaveBeenCalledTimes(2);
+    calls.mockReset().mockResolvedValue(new Response('{"error":"CDP_DISCONNECTED"}', { status: 503 }));
+    await expect(transport.action({ action: 'click', x: 1, y: 1 })).rejects.toThrow('action failed (CDP_DISCONNECTED)');
+    expect(calls).toHaveBeenCalledTimes(1);
+    calls.mockReset().mockResolvedValue(new Response('', { status: 401 }));
+    await expect(transport.snapshot()).rejects.toThrow('snapshot failed (HTTP_401)');
+    expect(calls).toHaveBeenCalledTimes(1);
+  });
   it('accepts the live provider reply with extra prose after its validated action', async () => {
     const model = { createSession: vi.fn(async () => 'private'), abort: vi.fn(async () => {}),
       prompt: vi.fn(async () => '{"action":"done","answer":"Heading: \\"Example Domain\\" {sample}"}\n\nThe heading is Example Domain.') };
