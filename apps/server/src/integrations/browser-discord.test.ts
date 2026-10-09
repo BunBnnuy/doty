@@ -56,4 +56,19 @@ describe('Discord browser requests', () => {
     startDiscordBrowser('Read', context, browser, vi.fn(async () => { throw new Error('Secret response'); }), log);
     await vi.waitFor(() => expect(log).toHaveBeenCalledWith('discord: browser result delivery failed'));
   });
+  it('tries another existing image after a CDN download fails instead of refusing the entire task', async () => {
+    const model = { createSession: vi.fn(async () => 's'), abort: vi.fn(async () => {}), prompt: vi.fn()
+      .mockResolvedValueOnce('{"action":"done","answer":"First image","image_id":0}')
+      .mockResolvedValueOnce('{"action":"done","answer":"Second public source","image_id":1}') };
+    const image = { data: Buffer.from('89504e470d0a1a0a', 'hex'), mime: 'image/png' };
+    const retrieve = vi.fn().mockRejectedValueOnce(new Error('CDN blocked')).mockResolvedValueOnce(image);
+    const browser = new BrowserWorkspace({ health: vi.fn(), screenshot: vi.fn(async () => Buffer.from('screen')),
+      snapshot: vi.fn(async () => ({})), action: vi.fn(), image: retrieve }, model);
+    const send = vi.fn(async () => {});
+    startDiscordBrowser('Find a meme', context, browser, send, vi.fn());
+    await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+    expect(retrieve.mock.calls).toEqual([[0], [1]]);
+    expect(model.prompt.mock.calls[1]?.[1]).toContain('could not be downloaded');
+    expect(send).toHaveBeenCalledWith('original-dm', expect.objectContaining({ content: 'Second public source' }));
+  });
 });

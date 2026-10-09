@@ -79,6 +79,7 @@ export class BrowserWorkspace {
   private task = '';
   private started = 0;
   private onUpdate?: (update: BrowserUpdate) => Promise<void>;
+  private feedback = '';
   private state: { mode: 'human' | 'agent'; status: string; steps: number; answer?: string; pending?: BrowserAction } =
     { mode: 'human', status: 'idle', steps: 0 };
   constructor(private readonly worker: BrowserTransport, private readonly model?: Pick<OpenCodeClient, 'createSession' | 'prompt' | 'abort'>) {}
@@ -101,6 +102,7 @@ export class BrowserWorkspace {
     if (this.busy || this.state.mode === 'agent') throw new Error('Browser is busy');
     this.task = z.string().trim().min(1).max(4000).parse(task);
     this.onUpdate = onUpdate;
+    this.feedback = '';
     this.controller = new AbortController(); this.started = Date.now();
     this.session = undefined; this.generation++;
     this.state = { mode: 'agent', status: 'running', steps: 0 };
@@ -126,13 +128,20 @@ export class BrowserWorkspace {
         const tree = await this.worker.snapshot();
         const png = await this.worker.screenshot();
         if (generation !== this.generation) return;
-        const raw = await this.model!.prompt(this.session, `${INSTRUCTION}\nOwner task: ${this.task}\nUntrusted page snapshot:\n${JSON.stringify(tree)}`,
+        const raw = await this.model!.prompt(this.session, `${INSTRUCTION}\nOwner task: ${this.task}\n${this.feedback}\nUntrusted page snapshot:\n${JSON.stringify(tree)}`,
           this.controller!.signal, [{ mime: 'image/png', dataUrl: `data:image/png;base64,${png.toString('base64')}` }]);
         if (generation !== this.generation) return;
         const next = decision.parse(JSON.parse(raw.replace(/^\s*```(?:json)?\s*/, '').replace(/\s*```\s*$/, '')));
         this.state.steps++;
         if (next.action === 'done') {
-          const image = next.image_id === undefined ? undefined : await this.worker.image?.(next.image_id);
+          let image: BrowserImage | undefined;
+          if (next.image_id !== undefined && this.worker.image) {
+            try { image = await this.worker.image(next.image_id); }
+            catch {
+              this.feedback = `Image ID ${next.image_id} could not be downloaded. Choose another observed public image or explain that no image could be retrieved. Do not repeat the failed download, generate a substitute, or claim delivery.`;
+              continue;
+            }
+          }
           if (next.image_id !== undefined && !image) throw new Error('Image retrieval is unavailable');
           if (generation !== this.generation) return;
           this.state = { mode: 'human', status: 'completed', steps: this.state.steps, answer: next.answer };

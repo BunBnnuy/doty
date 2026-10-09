@@ -121,6 +121,9 @@ async function main(): Promise<void> {
     // DISCORD_ALLOWED_USER_IDS.
     const sharedSessionUserIds = parseAllowedUserIds(process.env.DOTY_SHARED_SESSION_USER_IDS);
     const browserOwnerId = browserOwner(process.env);
+    app.log.info(browser && browserOwnerId && process.env.DOTY_TOKEN?.trim()
+      ? 'browser Discord routing: owner DM enabled'
+      : 'browser Discord routing: disabled (requires browser, owner id and API token)');
     const browserEnabled = (context: import('./integrations/discord.js').DiscordMessageContext): boolean =>
       !!browser && !!process.env.DOTY_TOKEN?.trim() && canUseDiscordBrowser(context, browserOwnerId);
     const startBrowser = (task: string, context: import('./integrations/discord.js').DiscordMessageContext): string => {
