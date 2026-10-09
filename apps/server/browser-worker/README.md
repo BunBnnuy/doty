@@ -48,7 +48,7 @@ Limits: worker 2 CPUs, 1536 MiB RAM, 256 processes; proxy 0.25 CPU, 128 MiB RAM,
 capabilities removed and no new privileges. Chromium's sandbox stays enabled.
 `seccomp.json` is derived from Moby profiles commit
 `6fe7deb1b9fb7c0397a4593480d7d22b9ee8caef`, with clone, clone3, unshare and setns
-allowed for Chromium's namespace sandbox. Docker's default AppArmor profile is
+and chroot allowed for Chromium's namespace sandbox. Docker's default AppArmor profile is
 retained. This shares the host kernel; it is not VM-level isolation.
 
 Environment: BROWSER_WORKER_TOKEN (provisioned), BROWSER_WORKER_URL (default

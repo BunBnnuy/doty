@@ -1026,17 +1026,6 @@
                      },
                      {
                          "names":  [
-                                       "chroot"
-                                   ],
-                         "action":  "SCMP_ACT_ALLOW",
-                         "includes":  {
-                                          "caps":  [
-                                                       "CAP_SYS_CHROOT"
-                                                   ]
-                                      }
-                     },
-                     {
-                         "names":  [
                                        "delete_module",
                                        "init_module",
                                        "finit_module"
@@ -1164,7 +1153,8 @@
                                        "clone",
                                        "clone3",
                                        "unshare",
-                                       "setns"
+                                       "setns",
+                                       "chroot"
                                    ],
                          "action":  "SCMP_ACT_ALLOW",
                          "args":  [
