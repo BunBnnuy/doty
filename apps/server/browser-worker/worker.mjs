@@ -6,15 +6,15 @@ const token = process.env.BROWSER_WORKER_TOKEN;
 if (!token) throw new Error('Worker authentication is required');
 const exec = promisify(execFile);
 const children = [];
+let browserReady = false;
 const start = (binary, args) => {
   const child = spawn(binary, args, { stdio: ['ignore', 'ignore', 'pipe'] });
   child.stderr.on('data', (data) => {
-    // Report startup sandbox errors without recording page URLs or page text.
-    if (/No usable sandbox|Operation not permitted|Failed to move to new namespace/.test(String(data)))
-      console.error(`${binary}: namespace sandbox startup failed`);
+    // Startup is about:blank only. Stop stderr logging before any site is opened.
+    if (!browserReady) console.error(`${binary}: ${String(data).slice(0, 4000).replace(/https?:\/\/\S+/g, '[URL]')}`);
   });
   child.on('error', () => process.exit(1));
-  child.on('exit', (code) => { console.error(`${binary} exited (${code})`); process.exit(1); });
+  child.on('exit', (code, signal) => { console.error(`${binary} exited (${code ?? signal})`); process.exit(1); });
   children.push(child);
   return child;
 };
@@ -108,7 +108,7 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(401); res.end(); return;
     }
     if (req.url === '/health') {
-      await cdp.connect(); res.end(JSON.stringify({ ready: true })); return;
+      await cdp.connect(); browserReady = true; res.end(JSON.stringify({ ready: true })); return;
     }
     if (req.url === '/screenshot' && req.method === 'GET') {
       const png = await screenshot();
