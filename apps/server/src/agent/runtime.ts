@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { EventLog } from '../events/log.js';
-import type { ChatProvider } from '../provider/types.js';
+import type { AgentImage, ChatProvider } from '../provider/types.js';
 import { createDefaultToolRegistry, type ToolRegistry } from '../tools/registry.js';
 import { runAgent, type AgentRunResult } from './loop.js';
 import type { AgentRunner } from './runner.js';
@@ -46,9 +46,10 @@ export class AgentRuntime implements AgentRunner {
 
   /**
    * Run a task and resolve with its result. `conversationKey` is ignored here
-   * (the in-process loop is stateless); the OpenCode backend uses it.
+   * (the in-process loop is stateless); the OpenCode backend uses it. `images`
+   * ride along on the user turn.
    */
-  async run(task: string, _conversationKey?: string): Promise<AgentRunResult> {
+  async run(task: string, _conversationKey?: string, images?: readonly AgentImage[]): Promise<AgentRunResult> {
     if (this.#closed) throw new Error('Agent runtime is closed');
     const runId = randomUUID();
     const controller = new AbortController();
@@ -59,6 +60,7 @@ export class AgentRuntime implements AgentRunner {
       log: this.log,
       runId,
       signal: controller.signal,
+      ...(images?.length ? { images } : {}),
     }).finally(() => this.#running.delete(controller));
     this.#running.set(controller, pending);
     return pending;

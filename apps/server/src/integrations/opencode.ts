@@ -17,6 +17,8 @@
  * surfaces as an error instead of silence.
  */
 
+import type { AgentImage } from '../provider/types.js';
+
 export interface OpenCodeConfig {
   /** e.g. http://127.0.0.1:4096 */
   baseUrl: string;
@@ -52,6 +54,25 @@ export function extractOpenCodeText(parts: unknown): string {
     }
   }
   return chunks.join('\n').trim();
+}
+
+/**
+ * Build the OpenCode prompt `parts`. Text is always a part; each image becomes a
+ * `file` part carrying an inline `data:` URL (OpenCode accepts data URLs).
+ */
+export function promptParts(text: string, images: readonly AgentImage[] = []): unknown[] {
+  const parts: unknown[] = [];
+  if (text) parts.push({ type: 'text', text });
+  for (const image of images) {
+    parts.push({
+      type: 'file',
+      url: image.dataUrl,
+      mime: image.mime,
+      ...(image.filename ? { filename: image.filename } : {}),
+    });
+  }
+  if (!parts.length) parts.push({ type: 'text', text });
+  return parts;
 }
 
 export class OpenCodeClient {
@@ -91,7 +112,12 @@ export class OpenCodeClient {
   }
 
   /** Post one turn and return the assistant's text. */
-  async prompt(sessionId: string, text: string, signal?: AbortSignal): Promise<string> {
+  async prompt(
+    sessionId: string,
+    text: string,
+    signal?: AbortSignal,
+    images: readonly AgentImage[] = [],
+  ): Promise<string> {
     const timeoutMs = this.config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const controller = new AbortController();
     const onAbort = (): void => controller.abort(signal?.reason);
@@ -111,7 +137,7 @@ export class OpenCodeClient {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          parts: [{ type: 'text', text }],
+          parts: promptParts(text, images),
           tools: HEADLESS_TOOLS,
           ...(this.config.agent ? { agent: this.config.agent } : {}),
         }),

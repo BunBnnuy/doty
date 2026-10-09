@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { DotStateEvent } from '@doty/protocol';
 import type { EventLog } from '../events/log.js';
-import type { ChatMessage, ChatProvider, ToolCall } from '../provider/types.js';
+import type { AgentImage, ChatMessage, ChatProvider, ToolCall, UserContentPart } from '../provider/types.js';
 import type { ToolRegistry } from '../tools/registry.js';
 import type { ToolArgs } from '../tools/types.js';
 import { evaluatePolicy } from './policy.js';
@@ -24,6 +24,8 @@ export interface AgentRunOptions {
   log: EventLog;
   persona?: string;
   history?: readonly ChatMessage[];
+  /** Images to attach to the user turn (multimodal task). */
+  images?: readonly AgentImage[];
   runId?: string;
   /** Maximum model turns (including the final-answer turn), not individual tools. */
   maxSteps?: number;
@@ -49,6 +51,16 @@ function parseArgs(json: string): ToolArgs {
   return value as ToolArgs;
 }
 
+/** User turn content: a plain string, or text + image parts when images ride along. */
+function userMessage(task: string, images: readonly AgentImage[] | undefined): ChatMessage {
+  if (!images?.length) return { role: 'user', content: task };
+  const content: UserContentPart[] = [
+    ...(task ? [{ type: 'text' as const, text: task }] : []),
+    ...images.map((image) => ({ type: 'image_url' as const, image_url: { url: image.dataUrl } })),
+  ];
+  return { role: 'user', content };
+}
+
 /** Every transition goes through the existing append-only, replayable SSE log. */
 export async function runAgent(options: AgentRunOptions): Promise<AgentRunResult> {
   const runId = options.runId ?? randomUUID();
@@ -59,7 +71,7 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentRunResult
   const messages: ChatMessage[] = [
     { role: 'system', content: options.persona ?? DEFAULT_PERSONA },
     ...(options.history ?? []),
-    { role: 'user', content: options.task },
+    userMessage(options.task, options.images),
   ];
   let steps = 0;
   const emit = (type: string, data: Record<string, unknown> = {}): void => {

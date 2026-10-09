@@ -12,6 +12,14 @@
  * in the developer portal, invite the bot, and set `DISCORD_BOT_TOKEN`.
  */
 
+/** The subset of a Discord attachment Doty forwards to the agent. */
+export interface DiscordAttachment {
+  url: string;
+  contentType?: string;
+  filename?: string;
+  size?: number;
+}
+
 export interface DiscordMessageContext {
   channelId: string;
   messageId: string;
@@ -21,6 +29,8 @@ export interface DiscordMessageContext {
   guildId?: string;
   /** Memory scope: per DM user, or per guild (server). */
   conversationKey: string;
+  /** Attachments on the message (images are passed to the agent). */
+  attachments: readonly DiscordAttachment[];
 }
 
 export interface DiscordBotOptions {
@@ -108,10 +118,15 @@ export interface IncomingMessage {
   mentionedBot: boolean;
   /** The message is a reply to one of the bot's messages. */
   replyToBot: boolean;
+  /** Attachments on the message (images are passed to the agent). */
+  attachments: DiscordAttachment[];
 }
 
 /** Case-insensitive words that trigger a reply. */
 export const DEFAULT_TRIGGER_WORDS: readonly string[] = ['doty', 'bot'];
+
+/** Used as the prompt when a message carries attachments but no text. */
+export const DEFAULT_ATTACHMENT_PROMPT = 'Mira la imagen que envié y responde.';
 
 export interface RespondOptions {
   allowedUserIds: ReadonlySet<string>;
@@ -160,6 +175,23 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+/** Parse the `attachments` array of a MESSAGE_CREATE payload. */
+export function parseAttachments(raw: unknown): DiscordAttachment[] {
+  if (!Array.isArray(raw)) return [];
+  const attachments: DiscordAttachment[] = [];
+  for (const item of raw) {
+    const record = asRecord(item);
+    if (!record || typeof record.url !== 'string' || !record.url) continue;
+    attachments.push({
+      url: record.url,
+      ...(typeof record.content_type === 'string' ? { contentType: record.content_type } : {}),
+      ...(typeof record.filename === 'string' ? { filename: record.filename } : {}),
+      ...(typeof record.size === 'number' ? { size: record.size } : {}),
+    });
+  }
+  return attachments;
+}
+
 function readIncoming(data: unknown, botUserId: string | undefined): IncomingMessage | null {
   const record = asRecord(data);
   if (!record) return null;
@@ -178,6 +210,7 @@ function readIncoming(data: unknown, botUserId: string | undefined): IncomingMes
     content: typeof record.content === 'string' ? record.content : '',
     mentionedBot: botUserId !== undefined && mentions.some((m) => asRecord(m)?.id === botUserId),
     replyToBot: botUserId !== undefined && referencedAuthor?.id === botUserId,
+    attachments: parseAttachments(record.attachments),
   };
 }
 
@@ -258,6 +291,7 @@ export function startDiscordBot(options: DiscordBotOptions): DiscordBot {
         ? `discord:dm:${message.authorId}`
         : `discord:guild:${message.guildId}`,
       ...(message.guildId !== undefined ? { guildId: message.guildId } : {}),
+      attachments: message.attachments,
     };
     void sendTyping(message.channelId);
     const typing = setInterval(() => void sendTyping(message.channelId), 8_000);
@@ -307,8 +341,8 @@ export function startDiscordBot(options: DiscordBotOptions): DiscordBot {
       return;
     }
     const text = stripBotMention(message.content, botUserId);
-    if (!text) return;
-    void respond(message, text);
+    if (!text && message.attachments.length === 0) return;
+    void respond(message, text || DEFAULT_ATTACHMENT_PROMPT);
   }
 
   function identify(ws: WebSocket): void {

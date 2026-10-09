@@ -42,7 +42,7 @@ describe('agent loop (mock provider, no network)', () => {
       { role: 'system', content: 'Test persona' }, { role: 'user', content: 'What time is it?' },
     ]);
     expect(provider.requests[1]?.messages.at(-1)).toMatchObject({ role: 'tool', toolCallId: 'call_1' });
-    const observation = JSON.parse(provider.requests[1]!.messages.at(-1)!.content);
+    const observation = JSON.parse(String(provider.requests[1]!.messages.at(-1)!.content));
     expect(observation).toMatchObject({ ok: true, result: { ts: expect.any(Number), iso: expect.any(String) } });
     expect(live).toEqual(log.since(0));
     expect(live.map((event) => event.seq)).toEqual(live.map((_, index) => index + 1));
@@ -72,6 +72,26 @@ describe('agent loop (mock provider, no network)', () => {
     expect(toolMessage.content.length).toBeLessThanOrEqual(MAX_OBSERVATION_CHARS + 40);
     const event = log.since(0).find((item) => item.type === 'observation');
     expect((event?.data as { observation: { truncated?: boolean } }).observation.truncated).toBe(true);
+  });
+
+  it('attaches images to the user turn as image_url parts', async () => {
+    const provider = new MockProvider([{ role: 'assistant', content: 'Veo un gato.' }]);
+    const log = new InMemoryEventLog();
+    const result = await runAgent({
+      task: '¿Qué ves?',
+      provider,
+      tools: new ToolRegistry(),
+      log,
+      images: [{ mime: 'image/png', dataUrl: 'data:image/png;base64,AAA', filename: 'cat.png' }],
+    });
+    expect(result.status).toBe('completed');
+    expect(provider.requests[0]?.messages.at(-1)).toEqual({
+      role: 'user',
+      content: [
+        { type: 'text', text: '¿Qué ves?' },
+        { type: 'image_url', image_url: { url: 'data:image/png;base64,AAA' } },
+      ],
+    });
   });
 
   it('stops at the step limit and ends with max_steps when the wrap-up has no answer', async () => {

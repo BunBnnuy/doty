@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { extractOpenCodeText, OpenCodeClient, parseOpenCodeModel } from './opencode.js';
+import { extractOpenCodeText, OpenCodeClient, parseOpenCodeModel, promptParts } from './opencode.js';
 
 describe('opencode helpers', () => {
   it('parses provider/model', () => {
@@ -20,6 +20,17 @@ describe('opencode helpers', () => {
     expect(extractOpenCodeText([{ type: 'text', text: '   ' }])).toBe('');
   });
 
+  it('builds text and file parts, always keeping a text part', () => {
+    expect(promptParts('hola')).toEqual([{ type: 'text', text: 'hola' }]);
+    expect(promptParts('mira', [
+      { mime: 'image/png', dataUrl: 'data:image/png;base64,AAA', filename: 'a.png' },
+    ])).toEqual([
+      { type: 'text', text: 'mira' },
+      { type: 'file', url: 'data:image/png;base64,AAA', mime: 'image/png', filename: 'a.png' },
+    ]);
+    expect(promptParts('', [])).toEqual([{ type: 'text', text: '' }]);
+  });
+
   it('creates a session and posts a prompt without interactive tools', async () => {
     const calls: Array<{ url: string; body: unknown }> = [];
     const fake: typeof fetch = async (input, init) => {
@@ -37,6 +48,24 @@ describe('opencode helpers', () => {
     expect(calls[1]?.body).toMatchObject({
       parts: [{ type: 'text', text: 'hola' }],
       tools: { question: false },
+    });
+  });
+
+  it('posts image parts as file parts', async () => {
+    let body: unknown;
+    const fake: typeof fetch = async (_input, init) => {
+      body = init?.body ? JSON.parse(String(init.body)) : undefined;
+      return new Response(JSON.stringify({ info: {}, parts: [{ type: 'text', text: 'ok' }] }), { status: 200 });
+    };
+    const client = new OpenCodeClient({ baseUrl: 'http://x', providerID: 'p', modelID: 'm' }, fake);
+    await client.prompt('ses_1', 'mira', undefined, [
+      { mime: 'image/png', dataUrl: 'data:image/png;base64,AAA', filename: 'a.png' },
+    ]);
+    expect(body).toMatchObject({
+      parts: [
+        { type: 'text', text: 'mira' },
+        { type: 'file', url: 'data:image/png;base64,AAA', mime: 'image/png', filename: 'a.png' },
+      ],
     });
   });
 

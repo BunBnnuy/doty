@@ -3,6 +3,7 @@ import {
   chunkDiscordMessage,
   discordIntents,
   parseAllowedUserIds,
+  parseAttachments,
   parseTriggerWords,
   resolveConversationKey,
   shouldRespondToMessage,
@@ -18,6 +19,7 @@ const msg = (over: Partial<IncomingMessage> = {}): IncomingMessage => ({
   content: 'hi',
   mentionedBot: false,
   replyToBot: false,
+  attachments: [],
   ...over,
 });
 
@@ -66,6 +68,32 @@ describe('discord helpers', () => {
     // Custom trigger words.
     expect(shouldRespondToMessage(msg({ guildId: 'g1', content: 'ping' }), { allowedUserIds: allowed, triggerWords: ['ping'] })).toBe(true);
     expect(shouldRespondToMessage(msg({ guildId: 'g1', content: 'ping' }), { allowedUserIds: allowed, triggerWords: ['doty'] })).toBe(false);
+  });
+});
+
+describe('attachments', () => {
+  it('parses image attachments and keeps their metadata', () => {
+    expect(parseAttachments([
+      { url: 'https://cdn.discordapp.com/a.png', content_type: 'image/png', filename: 'a.png', size: 123 },
+      { url: 'https://cdn.discordapp.com/b.txt', content_type: 'text/plain' },
+      { content_type: 'image/png' },
+      'nope',
+    ])).toEqual([
+      { url: 'https://cdn.discordapp.com/a.png', contentType: 'image/png', filename: 'a.png', size: 123 },
+      { url: 'https://cdn.discordapp.com/b.txt', contentType: 'text/plain' },
+    ]);
+    expect(parseAttachments(undefined)).toEqual([]);
+  });
+
+  it('still answers a mention that carries only an image', () => {
+    const allowed = new Set(['u1']);
+    const imageOnly = msg({
+      guildId: 'g1',
+      content: '',
+      mentionedBot: true,
+      attachments: [{ url: 'https://cdn.discordapp.com/a.png', contentType: 'image/png' }],
+    });
+    expect(shouldRespondToMessage(imageOnly, { allowedUserIds: allowed })).toBe(true);
   });
 });
 

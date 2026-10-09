@@ -9,6 +9,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { EventLog } from '../events/log.js';
+import type { AgentImage } from '../provider/types.js';
 import type { OpenCodeClient } from '../integrations/opencode.js';
 import type { AgentRunResult } from './loop.js';
 import type { AgentRunner } from './runner.js';
@@ -32,8 +33,8 @@ export class OpenCodeAgent implements AgentRunner {
     return runId;
   }
 
-  run(task: string, conversationKey = DESKTOP_SESSION_KEY): Promise<AgentRunResult> {
-    return this.execute(task, conversationKey, randomUUID());
+  run(task: string, conversationKey = DESKTOP_SESSION_KEY, images: readonly AgentImage[] = []): Promise<AgentRunResult> {
+    return this.execute(task, conversationKey, randomUUID(), images);
   }
 
   async close(): Promise<void> {
@@ -61,18 +62,23 @@ export class OpenCodeAgent implements AgentRunner {
     return created;
   }
 
-  private async execute(task: string, key: string, runId: string): Promise<AgentRunResult> {
+  private async execute(
+    task: string,
+    key: string,
+    runId: string,
+    images: readonly AgentImage[] = [],
+  ): Promise<AgentRunResult> {
     const emit = (type: string, data: Record<string, unknown> = {}): void => {
       this.log.append({ type, data: { runId, ...data } });
     };
     const state = (activity: 'thinking' | 'done' | 'error', label: string): void => {
       this.log.append({ type: 'dot_state', data: { runId, state: { activity, emotion: 'focused', label } } });
     };
-    emit('run_started', { task, backend: 'opencode' });
+    emit('run_started', { task, backend: 'opencode', ...(images.length ? { images: images.length } : {}) });
     state('thinking', 'Thinking…');
     try {
       const sessionId = await this.#session(key);
-      const answer = await this.client.prompt(sessionId, task);
+      const answer = await this.client.prompt(sessionId, task, undefined, images);
       emit('assistant_message', { content: answer });
       emit('final', { text: answer });
       state('done', 'Done');

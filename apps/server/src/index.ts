@@ -18,7 +18,7 @@ import { InMemoryEventLog } from './events/log.js';
 import { OpenAIChatProvider, openAIConfigFromEnv } from './provider/openai.js';
 import { PgEventLog } from './events/pg-log.js';
 import { AgentMemory, OpenAIEmbedder, embeddingConfigFromEnv, memoryStoreFromEnv } from './memory/index.js';
-import { parseAllowedUserIds, parseTriggerWords, resolveConversationKey, startDiscordBot, type DiscordBot } from './integrations/discord.js';
+import { parseAllowedUserIds, parseTriggerWords, resolveConversationKey, startDiscordBot, type DiscordAttachment, type DiscordBot } from './integrations/discord.js';
 import { extractCommandArg, parseVoiceCommand, VoiceManager } from './integrations/voice.js';
 import { handleReminderMessage, ReminderService, resolveTimeZone } from './integrations/reminders.js';
 import { classifyVoiceIntent, classifyVoiceIntentJev, JEV_DEFAULT_MODEL, JEV_DEFAULT_URL, type ClassifierConfig, type JevConfig } from './integrations/command-classifier.js';
@@ -29,6 +29,7 @@ import { ScheduleService } from './automations/schedules.js';
 import { createEmailServiceFromEnv } from './integrations/email/service.js';
 import { registerScheduleRoutes } from './routes/schedules.js';
 import type { AgentRunner } from './agent/runner.js';
+import type { AgentImage } from './provider/types.js';
 
 const PORT = Number.parseInt(process.env.PORT ?? '8787', 10);
 const HOST = process.env.HOST ?? '0.0.0.0';
@@ -203,7 +204,8 @@ async function main(): Promise<void> {
       handle: async (text, context) => {
         const key = resolveConversationKey(context, sharedSessionUserIds, DESKTOP_SESSION_KEY);
         eventLog.append({ type: 'message', data: { text } });
-        const result = await runtime.run(text, key);
+        const images = await loadDiscordImages(context.attachments, (message) => app.log.info(message));
+        const result = await runtime.run(text, key, images);
         const reply = result.answer ?? result.error ?? `No pude completar la tarea (${result.status}).`;
         if (context.guildId && voice?.connected(context.guildId)) {
           void voice.speak(context.guildId, reply);
@@ -286,4 +288,49 @@ function resolveDiscordUserId(env: NodeJS.ProcessEnv): string | undefined {
     if (first) return first;
   }
   return undefined;
+}
+
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const MAX_IMAGE_ATTACHMENTS = 4;
+
+/**
+ * Download the image attachments of a Discord message and inline them as
+ * `data:` URLs. Discord CDN URLs are signed and expire, so they are fetched
+ * immediately and never handed to the model backend as-is. Non-image
+ * attachments, oversized files and failed downloads are skipped.
+ */
+async function loadDiscordImages(
+  attachments: readonly DiscordAttachment[] | undefined,
+  log: (message: string) => void,
+): Promise<AgentImage[]> {
+  const images: AgentImage[] = [];
+  for (const attachment of attachments ?? []) {
+    if (images.length >= MAX_IMAGE_ATTACHMENTS) break;
+    if (!attachment.contentType?.startsWith('image/')) continue;
+    if (attachment.size !== undefined && attachment.size > MAX_IMAGE_BYTES) {
+      log(`discord: skipped image over ${MAX_IMAGE_BYTES} bytes`);
+      continue;
+    }
+    try {
+      const response = await fetch(attachment.url, { headers: { 'User-Agent': 'Doty/0.1' } });
+      if (!response.ok) {
+        log(`discord: image download failed (${response.status})`);
+        continue;
+      }
+      const data = Buffer.from(await response.arrayBuffer());
+      if (data.length > MAX_IMAGE_BYTES) {
+        log(`discord: skipped downloaded image over ${MAX_IMAGE_BYTES} bytes`);
+        continue;
+      }
+      const mime = attachment.contentType ?? response.headers.get('content-type') ?? 'image/png';
+      images.push({
+        mime,
+        dataUrl: `data:${mime};base64,${data.toString('base64')}`,
+        ...(attachment.filename ? { filename: attachment.filename } : {}),
+      });
+    } catch (error) {
+      log(`discord: image download errored (${error instanceof Error ? error.name : 'unknown'})`);
+    }
+  }
+  return images;
 }
