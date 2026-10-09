@@ -50,7 +50,7 @@ sudo -n docker run -d --name doty-browser-egress --restart unless-stopped \
   --security-opt no-new-privileges --memory 128m --cpus 0.25 --pids-limit 64 \
   --log-opt max-size=5m --log-opt max-file=2 -e "BLOCKED_IPS=$BLOCKED_IPS" "$IMAGE" node egress.mjs >/dev/null
 sudo -n docker network connect doty-browser-egress doty-browser-egress
-sudo -n docker run -d --name doty-browser --restart unless-stopped \
+sudo -n docker run -d --name doty-browser --hostname doty-browser --restart unless-stopped \
   --network doty-browser-private --read-only --cap-drop ALL \
   --security-opt no-new-privileges --security-opt "seccomp=$PWD/apps/server/browser-worker/seccomp.json" \
   --memory 1536m --cpus 2 --pids-limit 256 --shm-size 128m \

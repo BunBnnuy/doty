@@ -2,11 +2,19 @@ import http from 'node:http';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash, timingSafeEqual } from 'node:crypto';
+import { unlink } from 'node:fs/promises';
 const token = process.env.BROWSER_WORKER_TOKEN;
 if (!token) throw new Error('Worker authentication is required');
 const exec = promisify(execFile);
 const children = [];
 let browserReady = false;
+let shuttingDown = false;
+// This worker owns the profile, and deployment stops its old container first.
+// Chromium's lock links can survive a container crash or a hostname change.
+for (const name of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
+  try { await unlink(`/home/browser/profile/${name}`); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+}
 const start = (binary, args) => {
   const child = spawn(binary, args, { stdio: ['ignore', 'ignore', 'pipe'] });
   child.stderr.on('data', (data) => {
@@ -14,7 +22,9 @@ const start = (binary, args) => {
     if (!browserReady) console.error(`${binary}: ${String(data).slice(0, 4000).replace(/https?:\/\/\S+/g, '[URL]')}`);
   });
   child.on('error', () => process.exit(1));
-  child.on('exit', (code, signal) => { console.error(`${binary} exited (${code ?? signal})`); process.exit(1); });
+  child.on('exit', (code, signal) => {
+    if (!shuttingDown) { console.error(`${binary} exited (${code ?? signal})`); process.exit(1); }
+  });
   children.push(child);
   return child;
 };
@@ -139,7 +149,11 @@ const server = http.createServer(async (req, res) => {
   } catch { res.writeHead(503); res.end(JSON.stringify({ error: 'Workspace operation failed' })); }
 });
 server.listen(8890, '0.0.0.0');
-for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => {
+for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, async () => {
+  if (shuttingDown) return;
+  shuttingDown = true; server.close();
+  children.at(-1)?.kill('SIGTERM');
+  await new Promise(resolve => setTimeout(resolve, 1000));
   for (const child of children) child.kill('SIGTERM');
-  server.close(); process.exit(0);
+  process.exit(0);
 });
