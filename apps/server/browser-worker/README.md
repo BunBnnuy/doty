@@ -37,6 +37,8 @@ The worker is on an internal network. Only its egress proxy has an external
 network. The proxy permits HTTP/HTTPS on ports 80/443 and blocks private,
 reserved, loopback, metadata, IPv6 and server-local IP addresses. It pins each
 connection to the checked DNS result. The worker API binds on host loopback only.
+An INPUT firewall rule blocks new connections from the internal bridge to host
+services. A systemd unit restores that rule before Docker starts after reboot.
 The public API requires DOTY_TOKEN, including when other development routes are
 open. A separate generated root-owned worker token is injected with systemd.
 No host directory, host credential file or Docker socket is mounted.
@@ -59,7 +61,8 @@ Verification: `npm run typecheck -w @doty/server`,
 `npm run test -w @doty/server`,
 `node --test apps/server/browser-worker/egress-check.mjs`.
 The deploy smoke test checks worker auth, real HTTPS navigation, accessibility,
-desktop PNG size, and scroll input. It does not call a paid AI model.
+desktop PNG size, and scroll input. It also runs one bounded read-only AI task
+through OpenCode to verify vision input, planning, navigation and the answer.
 
 Rollback: revert the server commit and deploy it. Host Docker packages, volume,
 networks and systemd drop-in remain; remove them only through a reviewed cleanup

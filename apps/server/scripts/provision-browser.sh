@@ -29,6 +29,15 @@ REVISION=$(git rev-parse HEAD)
 IMAGE="doty-browser:${REVISION:0:12}"
 sudo -n docker build -t "$IMAGE" apps/server/browser-worker
 sudo -n docker network inspect doty-browser-private >/dev/null 2>&1 || sudo -n docker network create --internal doty-browser-private >/dev/null
+PRIVATE_SUBNET=$(sudo -n docker network inspect doty-browser-private --format '{{(index .IPAM.Config 0).Subnet}}')
+# Internal bridges still have a host gateway. Deny NEW connections to host
+# services while allowing responses to the host's authenticated worker API calls.
+sudo -n iptables -C INPUT -s "$PRIVATE_SUBNET" -m conntrack --ctstate NEW -m comment --comment doty-browser -j DROP 2>/dev/null ||
+  sudo -n iptables -I INPUT -s "$PRIVATE_SUBNET" -m conntrack --ctstate NEW -m comment --comment doty-browser -j DROP
+printf '[Unit]\nDescription=Block browser containers from host services\nBefore=docker.service\nAfter=network-pre.target\n[Service]\nType=oneshot\nExecStart=/bin/sh -c "iptables -C INPUT -s %s -m conntrack --ctstate NEW -m comment --comment doty-browser -j DROP || iptables -I INPUT -s %s -m conntrack --ctstate NEW -m comment --comment doty-browser -j DROP"\nRemainAfterExit=yes\n[Install]\nWantedBy=multi-user.target\n' "$PRIVATE_SUBNET" "$PRIVATE_SUBNET" |
+  sudo -n tee /etc/systemd/system/doty-browser-firewall.service >/dev/null
+sudo -n systemctl daemon-reload
+sudo -n systemctl enable --now doty-browser-firewall
 sudo -n docker network inspect doty-browser-egress >/dev/null 2>&1 || sudo -n docker network create doty-browser-egress >/dev/null
 sudo -n docker volume inspect doty-browser-profile >/dev/null 2>&1 || sudo -n docker volume create doty-browser-profile >/dev/null
 # Block the server's own public addresses too; the private ranges are always blocked.
@@ -51,4 +60,8 @@ sudo -n docker run -d --name doty-browser --restart unless-stopped \
   --env-file /etc/doty-browser/worker.env --log-opt max-size=5m --log-opt max-file=2 "$IMAGE" >/dev/null
 # Test from the host with the runtime credential; never print it.
 sudo -n sh -c 'set -a; . /etc/doty-browser/worker.env; set +a; exec node apps/server/browser-worker/smoke.mjs'
+PRIVATE_GATEWAY=$(sudo -n docker network inspect doty-browser-private --format '{{(index .IPAM.Config 0).Gateway}}')
+sudo -n docker exec -i -e "BROWSER_HOST_GATEWAY=$PRIVATE_GATEWAY" doty-browser node --input-type=module < apps/server/browser-worker/network-smoke.mjs
+# One bounded read-only AI task verifies the configured OpenCode path.
+sudo -n sh -c 'set -a; . /etc/doty-browser/worker.env; set +a; exec node --import tsx apps/server/src/browser/smoke.ts'
 echo 'browser workspace ready (2 CPUs / 1536 MiB limit; proxy 128 MiB)'

@@ -67,7 +67,7 @@ class CDP {
 const cdp = new CDP();
 async function screenshot() {
   const { stdout } = await exec('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-f', 'x11grab',
-    '-video_size', '1280x720', '-i', ':99', '-frames:v', '1', '-f', 'image2pipe', '-vcodec', 'png', 'pipe:1'],
+    '-video_size', '1280x720', '-i', ':99', '-frames:v', '1', '-threads', '1', '-filter_threads', '1', '-f', 'image2pipe', '-vcodec', 'png', 'pipe:1'],
   { encoding: 'buffer', maxBuffer: 4 * 1024 * 1024, timeout: 10_000 });
   return stdout;
 }
@@ -117,9 +117,11 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.url === '/snapshot' && req.method === 'GET') {
       const tree = await cdp.call('Accessibility.getFullAXTree');
+      const history = await cdp.call('Page.getNavigationHistory');
+      const page = history.entries[history.currentIndex];
       const nodes = tree.nodes.filter((node) => !node.ignored && node.name?.value)
         .slice(0, 200).map((node) => ({ role: node.role?.value, name: String(node.name.value).slice(0, 500) }));
-      res.end(JSON.stringify({ nodes })); return;
+      res.end(JSON.stringify({ url: page?.url, title: page?.title, nodes })); return;
     }
     if (req.url === '/action' && req.method === 'POST') {
       let text = '';
