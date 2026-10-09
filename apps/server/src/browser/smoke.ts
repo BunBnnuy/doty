@@ -65,4 +65,17 @@ try {
   }
   if (!memeResult.image || memeResult.image.data.length < 500) throw new Error('The exact failed meme request did not produce an existing image');
   console.log(`browser regression smoke: exact Gold Ship meme request delivered existing image bytes (${memeResult.image.preview ? 'preview' : 'original'})`);
+  browser.start('Search Google for "Tibo reset Codex limits twitter". Report two observed result titles and their source URLs. Use search, read the results page, and finish without clicking or typing.');
+  let researched = false;
+  for (let attempt = 0; attempt < 240; attempt++) {
+    const state = browser.status() as { status: string; answer?: string };
+    if (state.status === 'completed') {
+      researched = !!state.answer && /https:\/\//.test(state.answer);
+      break;
+    }
+    if (state.status === 'error' || state.status === 'approval') throw new Error(`Tibo search did not complete: ${state.answer || state.status}`);
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+  if (!researched) throw new Error('Tibo search did not return observed source URLs');
+  console.log('browser planner regression smoke: failed Tibo search completed with source URLs');
 } finally { browser.close(); }

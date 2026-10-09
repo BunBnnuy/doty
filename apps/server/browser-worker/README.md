@@ -17,6 +17,9 @@ Doty uses a fresh OpenCode planning session for each step, with all tool permiss
 Each step includes the current page, one screenshot and recent actions. The model
 has up to 180 seconds to reply; old screenshots do not accumulate in its context.
 Only the first validated action object is used if the provider adds extra prose.
+One native DeepSeek DSML action is also accepted through the same strict schema.
+Malformed replies get two correction attempts before the task stops; no rejected
+action is executed.
 Navigation waits for the new document to be ready and stable. Temporary page-read
 and connection errors have bounded retries. Concurrent requests share one Chromium
 connection and one screenshot capture. Clicks and typing are never replayed.

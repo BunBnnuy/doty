@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../app.js';
-import { BrowserWorker, BrowserWorkspace, browserAction, type BrowserTransport } from './workspace.js';
+import { BrowserWorker, BrowserWorkspace, browserAction, parseDecision, type BrowserTransport } from './workspace.js';
 import { OpenCodeClient } from '../integrations/opencode.js';
 
 function worker(): BrowserTransport {
@@ -8,6 +8,46 @@ function worker(): BrowserTransport {
     snapshot: vi.fn(async () => ({ nodes: [{ name: 'Untrusted page' }] })), action: vi.fn(async () => ({ ok: true })) };
 }
 describe('private browser workspace', () => {
+  const dsml = (name: string, parameters: string) => `<||DSML|| calls>\n<||DSML|| invoke name="${name}">\n${parameters}\n</||DSML|| invoke>\n</||DSML|| calls>`.replaceAll('|', '｜');
+  const parameter = (name: string, value: string, string = true) => `<||DSML|| parameter name="${name}" string="${string}">${value}</||DSML|| parameter>`;
+  it('accepts the exact native DeepSeek search format through the strict action schema', () => {
+    expect(parseDecision(dsml('search', parameter('query', 'Tibo reset Codex limits twitter') + parameter('images', 'false', false))))
+      .toEqual({ action: 'search', query: 'Tibo reset Codex limits twitter', images: false });
+    for (const raw of [dsml('bash', parameter('command', 'whoami')),
+      dsml('search', parameter('query', 'one') + parameter('query', 'two')),
+      dsml('search', parameter('query', 'one') + parameter('images', 'false')),
+      dsml('search', parameter('query', 'one') + parameter('shell', 'true', false)),
+      dsml('search', parameter('query', 'one')) + dsml('search', parameter('query', 'two'))]) expect(() => parseDecision(raw)).toThrow();
+    expect(parseDecision('{"action":"done","answer":"DSML is a format"}')).toMatchObject({ answer: 'DSML is a format' });
+  });
+  it('asks for a corrected reply after malformed output without executing it', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const transport = worker();
+      const model = { createSession: vi.fn(async () => 'private'), abort: vi.fn(async () => {}),
+        prompt: vi.fn().mockResolvedValueOnce('I will search now.')
+          .mockResolvedValueOnce(dsml('search', parameter('query', 'Tibo reset Codex limits twitter') + parameter('images', 'false', false)))
+          .mockResolvedValueOnce('{"action":"done","answer":"Read the search results"}') };
+      const browser = new BrowserWorkspace(transport, model);
+      browser.start('Find the Tibo post');
+      await vi.waitFor(() => expect(browser.status()).toMatchObject({ status: 'completed' }));
+      expect(transport.action).toHaveBeenCalledExactlyOnceWith({ action: 'search', query: 'Tibo reset Codex limits twitter', images: false });
+      expect(model.prompt.mock.calls[1]?.[1]).toContain('was not executed');
+      expect(errors).toHaveBeenCalledTimes(1);
+    } finally { errors.mockRestore(); }
+  });
+  it('stops after three malformed replies without running any action', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const transport = worker();
+      const model = { createSession: vi.fn(async () => 'private'), abort: vi.fn(async () => {}), prompt: vi.fn(async () => 'invalid') };
+      const browser = new BrowserWorkspace(transport, model);
+      browser.start('Read this page');
+      await vi.waitFor(() => expect(browser.status()).toMatchObject({ status: 'error' }));
+      expect(model.prompt).toHaveBeenCalledTimes(3);
+      expect(transport.action).not.toHaveBeenCalled();
+    } finally { errors.mockRestore(); }
+  });
   it('recovers a temporary page-read failure without repeating input or authentication failures', async () => {
     const calls = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(new Response('{"error":"CDP_CONTEXT_LOST"}', { status: 503 }))

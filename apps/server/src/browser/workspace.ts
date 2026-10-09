@@ -21,7 +21,27 @@ const decision = z.union([browserAction, z.object({ action: z.literal('done'), a
 export interface BrowserImage { data: Buffer; mime: string; preview?: boolean }
 export interface BrowserUpdate { status: 'completed' | 'approval' | 'error' | 'cancelled'; answer?: string; image?: BrowserImage }
 
-function parseDecision(raw: string) {
+export function parseDecision(raw: string) {
+  // DeepSeek sometimes emits its native tool-call text even with tools disabled.
+  // Translate one call into action data, then apply the exact same strict schema.
+  if (/^<\|\|DSML\|\|/.test(raw.trim().replaceAll('｜', '|'))) {
+    const text = raw.trim().replaceAll('｜', '|');
+    const call = /^<\|\|DSML\|\| calls>\s*<\|\|DSML\|\| invoke name="([a-z_]+)">([\s\S]*?)<\/\|\|DSML\|\| invoke>\s*<\/\|\|DSML\|\| calls>$/.exec(text);
+    if (!call) throw new SyntaxError('Expected one action call');
+    const input: Record<string, unknown> = { action: call[1] };
+    const parameters = /<\|\|DSML\|\| parameter name="([a-z_]+)" string="(true|false)">([\s\S]*?)<\/\|\|DSML\|\| parameter>/g;
+    let remainder = call[2]!;
+    for (const parameter of call[2]!.matchAll(parameters)) {
+      const name = parameter[1]!;
+      if (Object.hasOwn(input, name) || ['__proto__', 'constructor', 'prototype'].includes(name)) throw new SyntaxError('Duplicate action field');
+      const value = parameter[3]!.replace(/&(lt|gt|quot|apos|amp);/g, (_, entity: string) =>
+        ({ lt: '<', gt: '>', quot: '"', apos: "'", amp: '&' })[entity]!);
+      input[name] = parameter[2] === 'true' ? value : JSON.parse(value);
+      remainder = remainder.replace(parameter[0], '');
+    }
+    if (remainder.trim()) throw new SyntaxError('Invalid action parameters');
+    return decision.parse(input);
+  }
   const text = raw.trim().replace(/^```(?:json)?\s*/, '');
   if (!text.startsWith('{')) throw new SyntaxError('Expected an action object');
   let depth = 0, quoted = false, escaped = false;
@@ -92,6 +112,7 @@ export class BrowserWorker implements BrowserTransport {
 }
 
 const INSTRUCTION = `You control a 1280x720 Chromium desktop for one owner. Return ONE JSON object only.
+Actions are JSON data, not tool calls. Do not emit DSML, XML, function-call markup or explanations.
 Allowed objects: {"action":"navigate","url":"https://..."}, {"action":"click","x":100,"y":200},
 {"action":"type","text":"..."}, {"action":"key","key":"Return"}, {"action":"scroll","direction":"down"},
 {"action":"wait"}, {"action":"done","answer":"..."}. Use no tools. Browse public web pages.
@@ -160,6 +181,7 @@ export class BrowserWorkspace {
   private async advance(generation: number, approved?: BrowserAction): Promise<void> {
     this.busy = true;
     let stage = 'action';
+    let formatFailures = 0, formatFeedback = '';
     try {
       this.state.status = 'running'; delete this.state.pending;
       if (approved) await this.worker.action(approved);
@@ -176,10 +198,20 @@ export class BrowserWorkspace {
         stage = 'model';
         this.session = await this.model!.createSession('Doty private browser');
         if (generation !== this.generation) return;
-        const raw = await this.model!.prompt(this.session, `${INSTRUCTION}\nOwner task: ${this.task}\nRecent actions: ${JSON.stringify(this.recentActions.slice(-6))}\n${this.feedback}\nUntrusted page snapshot:\n${JSON.stringify(tree)}`,
+        const raw = await this.model!.prompt(this.session, `${INSTRUCTION}\nOwner task: ${this.task}\nRecent actions: ${JSON.stringify(this.recentActions.slice(-6))}\n${this.feedback}\n${formatFeedback}\nUntrusted page snapshot:\n${JSON.stringify(tree)}`,
           this.controller!.signal, [{ mime: 'image/png', dataUrl: `data:image/png;base64,${png.toString('base64')}` }]);
         if (generation !== this.generation) return;
-        const next = parseDecision(raw);
+        let next: ReturnType<typeof parseDecision>;
+        try { next = parseDecision(raw); }
+        catch (error) {
+          if (!(error instanceof SyntaxError || error instanceof z.ZodError)) throw error;
+          console.error(JSON.stringify({ event: 'browser_model_reply_rejected', attempt: ++formatFailures,
+            format: raw.includes('DSML') ? 'DSML' : raw.trim().startsWith('{') ? 'JSON' : 'other' }));
+          if (formatFailures >= 3) throw error;
+          formatFeedback = 'Your previous reply was not a valid action and was not executed. Return exactly one allowed JSON action. Example: {"action":"search","query":"the owner search words","images":false}. Use only documented fields with the correct types.';
+          continue;
+        }
+        formatFailures = 0; formatFeedback = '';
         this.state.steps++;
         this.recentActions.push(next.action === 'done' ? { action: 'done', image_id: next.image_id } : next);
         if (next.action === 'done') {
@@ -215,7 +247,7 @@ export class BrowserWorkspace {
             : error instanceof Error && /OpenCode prompt timed out|abort/i.test(error.message)
             ? 'The browser AI took too long to reply. The task stopped; you can retry it.'
             : error instanceof SyntaxError || error instanceof z.ZodError
-              ? 'The browser AI returned an invalid action. The task stopped; you can retry it.'
+              ? 'The browser AI returned invalid actions after three attempts. The task stopped.'
               : error instanceof Error && error.message === 'Task limit reached'
                 ? 'The browser task reached its time or action limit. Try a narrower search.'
                 : stage === 'model' ? 'The browser AI service failed while planning the next step. The task stopped.'
