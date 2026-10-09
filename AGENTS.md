@@ -68,8 +68,15 @@ events), `-o/--output-last-message`, `-i/--image`, `--ephemeral`,
 
 ## Deployment and change workflow
 
-- The Doty server is already running at `https://doty.killbunny.top`.
-- Make all project changes on server `kb` through SSH: `ssh kb`.
+- The Doty server runs at `https://doty.killbunny.top` (systemd unit
+  `doty-server` on `kb`).
+- **Never edit project files on `kb` directly.** All changes are made in the
+  local working copy.
+- To ship a server change: commit locally, then push to `origin` `master`. That
+  push triggers GitHub Actions (`.github/workflows/deploy.yml`), which verifies
+  (typecheck + tests) and runs `.github/scripts/deploy-kb.sh` on `kb`: it
+  `git fetch` + `git reset --hard origin/master`, reinstalls only when the
+  lockfile changed, rebuilds contracts, and restarts `doty-server`.
 - Do not start a local Doty desktop app or API unless the user asks for it.
-- Before changing files or restarting services, connect to `kb` and inspect the
-  current server state. Keep changes and runtime operations on that server.
+- You may `ssh kb` to *inspect* for verification (logs, `systemctl status`,
+  health) — never to modify files.
