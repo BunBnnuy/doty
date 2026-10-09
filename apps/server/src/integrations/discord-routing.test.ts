@@ -13,7 +13,7 @@ describe('one Discord routing decision', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     const body = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body));
     expect(Object.keys(body.questions)).toEqual(['command']);
-    expect(body.questions.command.criteria).toMatchObject({ ai: expect.stringContaining('DEFAULT'), web: expect.stringContaining('EXISTING'), image: expect.stringContaining('CREATE'), play: expect.any(String) });
+    expect(body.questions.command.criteria).toMatchObject({ ai: expect.stringContaining('DEFAULT'), web: expect.stringContaining('EXISTING'), image: expect.stringContaining('CREATION'), play: expect.any(String) });
   });
   it('keeps explicit music commands ahead of JEV, with their arguments', async () => {
     const fetchImpl = vi.fn<typeof fetch>();

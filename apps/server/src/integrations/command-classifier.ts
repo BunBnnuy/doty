@@ -125,9 +125,9 @@ const DISCORD_CRITERIA: Record<string, string> = {
   queue: 'The user requests the music queue.',
   join: 'The user commands the bot to join voice.',
   say: 'The user asks the bot to speak specific text aloud.',
-  ai: 'DEFAULT: ordinary conversation, greetings, explanations, coding, advice, stable factual questions, or analysis of an attached image. Answer directly with AI. Mentioning a website, internet, an image or a topic does not by itself require browsing or image generation.',
+  ai: 'DEFAULT: ordinary conversation, greetings, explanations, coding, advice, stable factual questions, or analysis of an attached image. Answer directly with AI. Capability questions without an actual image description or edit request are ai: "Puedes generar imagenes?", "Can you create images?", "What can you do?". Mentioning a website, internet, an image or a topic does not by itself require browsing or image generation.',
   web: 'The user explicitly requests an internet search, opening/checking a website or link, finding and sending an EXISTING image or meme, or facts that require current external verification (latest news, live prices, current availability). Do not choose this for general knowledge, conversation, or creating/editing images.',
-  image: 'The user asks to CREATE, GENERATE, DRAW or EDIT an image, including edits to an attachment. Do not choose this for image analysis, questions about image generation, or finding an existing image or meme.',
+  image: 'The user requests actual image CREATION or EDITING with a subject, scene, style or requested transformation: "Genera una imagen de un conejo", "Puedes dibujar un conejo?", "Cambia el fondo de esta imagen a azul". A question about whether Doty CAN generate images, without describing an image or an edit, is ai, NEVER image. Exclude image analysis and finding an existing image or meme.',
 };
 
 export function parseDiscordIntentJev(body: unknown): DiscordIntent | null {

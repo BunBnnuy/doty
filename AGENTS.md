@@ -44,6 +44,18 @@ in parallel across disjoint directories.
 
 ## Model routing (project rule)
 
+- **All new features that need an AI decision must use the JEV typed-decision API.**
+  - This includes intent classification, action selection, and routing between
+    Discord commands, direct AI replies, web lookup, and image creation/editing.
+  - Extend the existing JEV decision flow. Do not delegate new routing decisions
+    to the main conversation model or replace them with keyword heuristics.
+  - Preserve existing Discord command handling and use one combined JEV choice
+    when the options belong to the same decision.
+  - Deterministic command parsing, schema validation, permission checks and
+    execution remain in application code. Define a safe fallback for JEV failure.
+  - Verify the choice criteria with representative messages, including ordinary
+    questions that must remain direct AI replies.
+
 - **OpenAI models are run through the Codex CLI, never as a subagent model.**
   - Correct: `codex exec --cd <dir> --approve-for-me -o <out> "<task>"`
   - Wrong: `subagent(model: "opencode/gpt-6.1-sol" | "opencode-go/gpt-6-luna" | ...)`

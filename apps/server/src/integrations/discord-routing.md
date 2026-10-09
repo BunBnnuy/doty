@@ -1,5 +1,12 @@
 # Discord routing
 
+JEV currently defaults to `jev-1.13-free`. Free and paid models use
+the same `https://opencode.ai/zen/v1/systemone` endpoint and existing Zen key.
+Set `JEV_MODEL=jev-1.13-free` to select the free variant, or `JEV_MODEL=jev-1.13`
+for paid use after enabling that model in the Zen workspace. `JEV_BASE_URL` still
+supports an explicit endpoint override. A disabled paid model returns HTTP 403;
+enable it before switching the running service.
+
 Explicit browser/music commands and reminders keep their existing priority.
 For other messages one JEV choice selects a voice/music command, direct AI reply,
 web lookup, or image creation/editing. Direct AI is the default for conversation,
