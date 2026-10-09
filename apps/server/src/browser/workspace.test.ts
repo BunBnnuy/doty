@@ -8,6 +8,13 @@ function worker(): BrowserTransport {
     snapshot: vi.fn(async () => ({ nodes: [{ name: 'Untrusted page' }] })), action: vi.fn(async () => ({ ok: true })) };
 }
 describe('private browser workspace', () => {
+  it('accepts the live provider reply with extra prose after its validated action', async () => {
+    const model = { createSession: vi.fn(async () => 'private'), abort: vi.fn(async () => {}),
+      prompt: vi.fn(async () => '{"action":"done","answer":"Heading: \\"Example Domain\\" {sample}"}\n\nThe heading is Example Domain.') };
+    const browser = new BrowserWorkspace(worker(), model);
+    browser.start('Read the main heading');
+    await vi.waitFor(() => expect(browser.status()).toMatchObject({ status: 'completed', answer: 'Heading: "Example Domain" {sample}' }));
+  });
   it('requires auth even when the main API has no token, and never writes page content to shared events', async () => {
     for (const token of ['', 'owner']) {
       const browser = new BrowserWorkspace(worker());

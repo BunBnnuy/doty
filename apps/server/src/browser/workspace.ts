@@ -21,6 +21,23 @@ const decision = z.union([browserAction, z.object({ action: z.literal('done'), a
 export interface BrowserImage { data: Buffer; mime: string; preview?: boolean }
 export interface BrowserUpdate { status: 'completed' | 'approval' | 'error' | 'cancelled'; answer?: string; image?: BrowserImage }
 
+function parseDecision(raw: string) {
+  const text = raw.trim().replace(/^```(?:json)?\s*/, '');
+  if (!text.startsWith('{')) throw new SyntaxError('Expected an action object');
+  let depth = 0, quoted = false, escaped = false;
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') quoted = false;
+    } else if (char === '"') quoted = true;
+    else if (char === '{') depth++;
+    else if (char === '}' && --depth === 0) return decision.parse(JSON.parse(text.slice(0, i + 1)));
+  }
+  throw new SyntaxError('Incomplete action object');
+}
+
 export interface BrowserTransport {
   health(): Promise<unknown>;
   screenshot(): Promise<Buffer>;
@@ -138,7 +155,7 @@ export class BrowserWorkspace {
         const raw = await this.model!.prompt(this.session, `${INSTRUCTION}\nOwner task: ${this.task}\nRecent actions: ${JSON.stringify(this.recentActions.slice(-6))}\n${this.feedback}\nUntrusted page snapshot:\n${JSON.stringify(tree)}`,
           this.controller!.signal, [{ mime: 'image/png', dataUrl: `data:image/png;base64,${png.toString('base64')}` }]);
         if (generation !== this.generation) return;
-        const next = decision.parse(JSON.parse(raw.replace(/^\s*```(?:json)?\s*/, '').replace(/\s*```\s*$/, '')));
+        const next = parseDecision(raw);
         this.state.steps++;
         this.recentActions.push(next.action === 'done' ? { action: 'done', image_id: next.image_id } : next);
         if (next.action === 'done') {

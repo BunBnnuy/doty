@@ -16,6 +16,7 @@ user. Server channels cannot access the browser.
 Doty uses a fresh OpenCode planning session for each step, with all tool permissions denied.
 Each step includes the current page, one screenshot and recent actions. The model
 has up to 180 seconds to reply; old screenshots do not accumulate in its context.
+Only the first validated action object is used if the provider adds extra prose.
 It sees a desktop screenshot and page accessibility text. It can navigate and
 read, search, and open observed public links automatically. Every generic click, key press, and typing action needs approval in
 the browser page. Review the visible page and pending action before approval.
