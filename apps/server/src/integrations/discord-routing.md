@@ -1,6 +1,6 @@
 # Discord routing
 
-JEV currently defaults to `jev-1.13-free`. Free and paid models use
+JEV defaults to the paid model `jev-1.13`. Free and paid models use
 the same `https://opencode.ai/zen/v1/systemone` endpoint and existing Zen key.
 Set `JEV_MODEL=jev-1.13-free` to select the free variant, or `JEV_MODEL=jev-1.13`
 for paid use after enabling that model in the Zen workspace. `JEV_BASE_URL` still

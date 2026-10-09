@@ -155,7 +155,7 @@ async function main(): Promise<void> {
           ...(process.env.OPENAI_SESSION_ID?.trim() ? { sessionId: process.env.OPENAI_SESSION_ID.trim() } : {}),
         }
       : undefined;
-    app.log.info(jev ? 'jev Discord router: enabled (commands, AI, web, images)' : 'jev Discord router: disabled');
+    app.log.info(jev ? `jev Discord router: enabled (${jev.model}; commands, AI, web, images)` : 'jev Discord router: disabled');
     voice = new VoiceManager({
       log: (message) => app.log.info(message),
       ...(process.env.PIPER_BIN?.trim() ? { piperBin: process.env.PIPER_BIN.trim() } : {}),

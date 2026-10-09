@@ -105,7 +105,7 @@ export interface JevConfig {
   /** OpenCode exposes Jev at https://opencode.ai/zen/v1/systemone */
   baseUrl: string;
   apiKey: string;
-  /** Model id, e.g. `jev-1.13-free`. */
+  /** Model id, e.g. `jev-1.13` (paid) or `jev-1.13-free`. */
   model?: string;
   userAgent?: string;
   sessionId?: string;
@@ -113,7 +113,7 @@ export interface JevConfig {
 }
 
 export const JEV_DEFAULT_URL = 'https://opencode.ai/zen/v1/systemone';
-export const JEV_DEFAULT_MODEL = 'jev-1.13-free';
+export const JEV_DEFAULT_MODEL = 'jev-1.13';
 
 export type DiscordIntent = { kind: 'command'; command: VoiceCommand } | { kind: 'ai' | 'web' | 'image' };
 const DISCORD_CRITERIA: Record<string, string> = {
