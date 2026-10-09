@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   chunkDiscordMessage,
   discordIntents,
@@ -8,6 +8,7 @@ import {
   resolveConversationKey,
   shouldRespondToMessage,
   stripBotMention,
+  startDiscordBot,
   type IncomingMessage,
 } from './discord.js';
 
@@ -21,6 +22,41 @@ const msg = (over: Partial<IncomingMessage> = {}): IncomingMessage => ({
   replyToBot: false,
   attachments: [],
   ...over,
+});
+
+describe('Discord uploads', () => {
+  afterEach(() => vi.unstubAllGlobals());
+  it('uploads binary images as multipart and keeps long text chunks separate', async () => {
+    vi.stubGlobal('WebSocket', class { addEventListener() {} close() {} });
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const bot = startDiscordBot({ token: 'test', handle: async () => undefined });
+    try {
+      await bot.send('dm-channel', { content: 'x'.repeat(2100),
+        files: [{ filename: 'image.png', mime: 'image/png', data: new Uint8Array([1, 2, 3]) }] });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      const first = fetchMock.mock.calls[0]![1];
+      expect(first.headers['content-type']).toBeUndefined();
+      expect(first.body).toBeInstanceOf(FormData);
+      expect(JSON.parse(first.body.get('payload_json'))).toMatchObject({
+        attachments: [{ id: 0, filename: 'image.png' }], allowed_mentions: { parse: [] },
+      });
+      expect(await first.body.get('files[0]').arrayBuffer()).toEqual(new Uint8Array([1, 2, 3]).buffer);
+      expect(fetchMock.mock.calls[1]![1].headers['content-type']).toBe('application/json');
+    } finally { bot.stop(); }
+  });
+  it('supports image-only replies and reports upload failures', async () => {
+    vi.stubGlobal('WebSocket', class { addEventListener() {} close() {} });
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 403 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const bot = startDiscordBot({ token: 'test', handle: async () => undefined });
+    try {
+      await expect(bot.send('guild-channel', { content: '',
+        files: [{ filename: 'image.png', mime: 'image/png', data: new Uint8Array([1]) }] }))
+        .rejects.toThrow('delivery failed');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally { bot.stop(); }
+  });
 });
 
 describe('discord helpers', () => {

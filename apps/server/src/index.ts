@@ -23,6 +23,7 @@ import { extractCommandArg, parseVoiceCommand, VoiceManager } from './integratio
 import { handleReminderMessage, ReminderService, resolveTimeZone } from './integrations/reminders.js';
 import { classifyVoiceIntent, classifyVoiceIntentJev, JEV_DEFAULT_MODEL, JEV_DEFAULT_URL, type ClassifierConfig, type JevConfig } from './integrations/command-classifier.js';
 import { OpenCodeClient, parseOpenCodeModel } from './integrations/opencode.js';
+import { CodexImageGenerator, deliverImageRequest, IMAGE_REPLY_INSTRUCTION, parseImageRequest } from './integrations/codex-images.js';
 import { OpenCodeAgent, DESKTOP_SESSION_KEY } from './agent/opencode-agent.js';
 import { SessionStore } from './agent/sessions.js';
 import { ScheduleService } from './automations/schedules.js';
@@ -108,6 +109,7 @@ async function main(): Promise<void> {
     // desktop client share one OpenCode history. Same comma-separated format as
     // DISCORD_ALLOWED_USER_IDS.
     const sharedSessionUserIds = parseAllowedUserIds(process.env.DOTY_SHARED_SESSION_USER_IDS);
+    const imageGenerator = new CodexImageGenerator();
     const commandModel = process.env.COMMAND_MODEL?.trim() || process.env.OPENAI_MODEL?.trim();
     const classifier: ClassifierConfig | undefined = commandModel && process.env.OPENAI_BASE_URL?.trim()
       ? {
@@ -205,7 +207,18 @@ async function main(): Promise<void> {
         const key = resolveConversationKey(context, sharedSessionUserIds, DESKTOP_SESSION_KEY);
         eventLog.append({ type: 'message', data: { text } });
         const images = await loadDiscordImages(context.attachments, (message) => app.log.info(message));
-        const result = await runtime.run(text, key, images);
+        const result = await runtime.run(`${IMAGE_REPLY_INSTRUCTION}\n\nUser message:\n${text}`, key, images);
+        const imageRequest = result.status === 'completed' && result.answer
+          ? parseImageRequest(result.answer) : undefined;
+        if (imageRequest) {
+          try {
+            if (!discord) throw new Error('Discord is unavailable');
+            return await deliverImageRequest(imageRequest, context, images, imageGenerator, discord);
+          } catch (error) {
+            app.log.warn(`discord: image generation or delivery failed (${error instanceof Error ? error.name : 'unknown'})`);
+            return 'No pude generar o enviar la imagen. Revisa el acceso de Codex a imágenes y vuelve a intentarlo.';
+          }
+        }
         const reply = result.answer ?? result.error ?? `No pude completar la tarea (${result.status}).`;
         if (context.guildId && voice?.connected(context.guildId)) {
           void voice.speak(context.guildId, reply);

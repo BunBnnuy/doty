@@ -44,7 +44,7 @@ export interface DiscordBotOptions {
   /** Request the privileged MESSAGE_CONTENT intent. Default true. */
   messageContent?: boolean;
   /** Produce the reply text for an incoming message (runs the agent). */
-  handle: (text: string, context: DiscordMessageContext) => Promise<string | undefined>;
+  handle: (text: string, context: DiscordMessageContext) => Promise<string | DiscordReply | undefined>;
   /**
    * Optional command hook (music, etc.). Return a string to reply and skip the
    * agent, or `undefined` to let the agent handle the message.
@@ -62,10 +62,21 @@ export interface DiscordBotOptions {
 
 export interface DiscordBot {
   /** Post a message to a channel unprompted (e.g. a scheduled reminder). */
-  send(channelId: string, content: string): Promise<void>;
+  send(channelId: string, content: string | DiscordReply): Promise<void>;
   /** Open (or reuse) the DM channel with a user; `undefined` when it fails. */
   dmChannel(userId: string): Promise<string | undefined>;
   stop(): void;
+}
+
+export interface DiscordFile {
+  filename: string;
+  mime: string;
+  data: Uint8Array;
+}
+
+export interface DiscordReply {
+  content: string;
+  files?: readonly DiscordFile[];
 }
 
 const GATEWAY_URL = 'wss://gateway.discord.gg/?v=10&encoding=json';
@@ -238,17 +249,35 @@ export function startDiscordBot(options: DiscordBotOptions): DiscordBot {
     'User-Agent': USER_AGENT,
   };
 
-  async function sendMessage(channelId: string, content: string): Promise<void> {
-    for (const chunk of chunkDiscordMessage(content)) {
+  async function sendMessage(channelId: string, reply: string | DiscordReply): Promise<void> {
+    const content = typeof reply === 'string' ? reply : reply.content;
+    const files = typeof reply === 'string' ? [] : reply.files ?? [];
+    const chunks = chunkDiscordMessage(content);
+    if (!chunks.length && files.length) chunks.push('');
+    for (const [index, chunk] of chunks.entries()) {
+      const payload = { content: chunk, allowed_mentions: { parse: [] } };
+      let body: string | FormData = JSON.stringify(payload);
+      const headers = { ...authHeaders };
+      if (index === 0 && files.length) {
+        const form = new FormData();
+        form.set('payload_json', JSON.stringify({ ...payload,
+          attachments: files.map((file, id) => ({ id, filename: file.filename })),
+        }));
+        files.forEach((file, id) => form.set(`files[${id}]`,
+          new Blob([new Uint8Array(file.data)], { type: file.mime }), file.filename));
+        delete headers['content-type'];
+        body = form;
+      }
       try {
         const response = await fetch(`${API_BASE}/channels/${channelId}/messages`, {
           method: 'POST',
-          headers: authHeaders,
-          body: JSON.stringify({ content: chunk }),
+          headers,
+          body,
         });
-        if (!response.ok) log(`discord: reply failed with ${response.status}`);
+        if (!response.ok) throw new Error(`Discord upload HTTP ${response.status}`);
       } catch (error) {
         log(`discord: reply request errored (${error instanceof Error ? error.name : 'unknown'})`);
+        throw new Error('Discord message delivery failed');
       }
     }
   }
@@ -304,7 +333,11 @@ export function startDiscordBot(options: DiscordBotOptions): DiscordBot {
         }
       }
       const reply = await options.handle(text, context);
-      if (reply && reply.trim()) await sendMessage(message.channelId, reply.trim());
+      if (typeof reply === 'string') {
+        if (reply.trim()) await sendMessage(message.channelId, reply.trim());
+      } else if (reply && (reply.content.trim() || reply.files?.length)) {
+        await sendMessage(message.channelId, reply);
+      }
     } catch (error) {
       log(`discord: handler errored (${error instanceof Error ? error.name : 'unknown'})`);
       await sendMessage(message.channelId, 'Algo falló al procesar tu mensaje.');
@@ -342,7 +375,7 @@ export function startDiscordBot(options: DiscordBotOptions): DiscordBot {
     }
     const text = stripBotMention(message.content, botUserId);
     if (!text && message.attachments.length === 0) return;
-    void respond(message, text || DEFAULT_ATTACHMENT_PROMPT);
+    void respond(message, text || DEFAULT_ATTACHMENT_PROMPT).catch(() => log('discord: error reply delivery failed'));
   }
 
   function identify(ws: WebSocket): void {
