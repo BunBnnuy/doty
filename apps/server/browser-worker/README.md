@@ -37,6 +37,7 @@ The worker is on an internal network. Only its egress proxy has an external
 network. The proxy permits HTTP/HTTPS on ports 80/443 and blocks private,
 reserved, loopback, metadata, IPv6 and server-local IP addresses. It pins each
 connection to the checked DNS result. The worker API binds on host loopback only.
+The host uses a small systemd socket relay to reach the internal-only bridge.
 An INPUT firewall rule blocks new connections from the internal bridge to host
 services. A systemd unit restores that rule before Docker starts after reboot.
 The public API requires DOTY_TOKEN, including when other development routes are

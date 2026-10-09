@@ -51,13 +51,24 @@ sudo -n docker run -d --name doty-browser-egress --restart unless-stopped \
   --log-opt max-size=5m --log-opt max-file=2 -e "BLOCKED_IPS=$BLOCKED_IPS" "$IMAGE" node egress.mjs >/dev/null
 sudo -n docker network connect doty-browser-egress doty-browser-egress
 sudo -n docker run -d --name doty-browser --restart unless-stopped \
-  --network doty-browser-private -p 127.0.0.1:8890:8890 --read-only --cap-drop ALL \
+  --network doty-browser-private --read-only --cap-drop ALL \
   --security-opt no-new-privileges --security-opt "seccomp=$PWD/apps/server/browser-worker/seccomp.json" \
   --memory 1536m --cpus 2 --pids-limit 256 --shm-size 128m \
   --tmpfs /tmp:rw,nosuid,nodev,size=128m --tmpfs /home/browser/.cache:rw,nosuid,nodev,size=64m,uid=1001,gid=1001 \
   --tmpfs /home/browser/.config:rw,nosuid,nodev,size=16m,uid=1001,gid=1001 \
+  --tmpfs /home/browser/.local:rw,nosuid,nodev,size=16m,uid=1001,gid=1001 \
   --mount type=volume,src=doty-browser-profile,dst=/home/browser/profile \
   --env-file /etc/doty-browser/worker.env --log-opt max-size=5m --log-opt max-file=2 "$IMAGE" >/dev/null
+# Docker does not publish ports for this internal-only bridge. Use a small
+# systemd TCP relay with a socket bound strictly to host loopback instead.
+WORKER_IP=$(sudo -n docker inspect --format '{{(index .NetworkSettings.Networks "doty-browser-private").IPAddress}}' doty-browser)
+printf '[Unit]\nDescription=Private browser API relay\nRequires=docker.service\nAfter=docker.service\n[Service]\nExecStart=/usr/lib/systemd/systemd-socket-proxyd %s:8890\nDynamicUser=yes\nNoNewPrivileges=yes\nPrivateTmp=yes\nProtectSystem=strict\nProtectHome=yes\nPrivateDevices=yes\nRestrictAddressFamilies=AF_INET AF_INET6\n' "$WORKER_IP" |
+  sudo -n tee /etc/systemd/system/doty-browser-relay.service >/dev/null
+printf '[Unit]\nDescription=Loopback socket for private browser API\n[Socket]\nListenStream=127.0.0.1:8890\n[Install]\nWantedBy=sockets.target\n' |
+  sudo -n tee /etc/systemd/system/doty-browser-relay.socket >/dev/null
+sudo -n systemctl stop doty-browser-relay.service || true
+sudo -n systemctl daemon-reload
+sudo -n systemctl enable --now doty-browser-relay.socket
 # Test from the host with the runtime credential; never print it.
 sudo -n sh -c 'set -a; . /etc/doty-browser/worker.env; set +a; exec node apps/server/browser-worker/smoke.mjs'
 PRIVATE_GATEWAY=$(sudo -n docker network inspect doty-browser-private --format '{{(index .IPAM.Config 0).Gateway}}')

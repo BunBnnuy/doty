@@ -88,7 +88,12 @@ export async function action(input) {
     await exec('xdotool', ['mousemove', number(input.x, 1279), number(input.y, 719), 'click', '1']);
   } else if (input.action === 'type') {
     if (typeof input.text !== 'string' || input.text.length > 4000) throw new Error('Invalid text');
-    await exec('xdotool', ['type', '--clearmodifiers', '--', input.text]);
+    // Keep typed passwords and text out of the process argument list.
+    await new Promise((resolve, reject) => {
+      const child = execFile('xdotool', ['type', '--clearmodifiers', '--delay', '1', '--file', '-'],
+        { timeout: 10_000, maxBuffer: 4096 }, (error) => error ? reject(error) : resolve());
+      child.stdin.on('error', reject); child.stdin.end(input.text);
+    });
   } else if (input.action === 'key') {
     if (!keys.has(input.key)) throw new Error('Unsupported key');
     await exec('xdotool', ['key', '--clearmodifiers', input.key]);
