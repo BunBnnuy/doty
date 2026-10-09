@@ -3,6 +3,7 @@ import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { unlink } from 'node:fs/promises';
+import { downloadPublicImage, publicURL } from './images.mjs';
 const token = process.env.BROWSER_WORKER_TOKEN;
 if (!token) throw new Error('Worker authentication is required');
 const exec = promisify(execFile);
@@ -75,6 +76,38 @@ class CDP {
   }
 }
 const cdp = new CDP();
+let observedLinks = [], observedImages = [], observedURL;
+async function observation() {
+  const frames = await cdp.call('Page.getFrameTree');
+  const world = await cdp.call('Page.createIsolatedWorld', { frameId: frames.frameTree.frame.id, worldName: 'doty-observation' });
+  const result = await cdp.call('Runtime.evaluate', { contextId: world.executionContextId, returnByValue: true,
+    expression: `(() => {
+      const links = Array.from(document.querySelectorAll('a[href]')).slice(0, 300).map(a =>
+        ({ url: a.href, title: (a.innerText || a.getAttribute('aria-label') || '').slice(0,250) }));
+      const images = [];
+      for (const a of document.querySelectorAll('a.iusc[m]')) {
+        try { const m = JSON.parse(a.getAttribute('m')); images.push({url:m.murl,source:m.purl,title:(m.t || a.innerText || a.querySelector('img')?.alt || '').slice(0,250)}); } catch {}
+      }
+      for (const img of document.querySelectorAll('img')) images.push({url:img.currentSrc || img.src,
+        source:img.closest('a')?.href || location.href,title:img.alt.slice(0,250)});
+      return {links,images:images.slice(0,200)};
+    })()` });
+  const data = result.result?.value || {};
+  const unique = (items, max) => {
+    const seen = new Set(), accepted = [];
+    for (const item of items || []) {
+      try {
+        const url = publicURL(item.url).href;
+        if (seen.has(url)) continue; seen.add(url);
+        accepted.push({ ...item, url, id: accepted.length });
+        if (accepted.length >= max) break;
+      } catch {}
+    }
+    return accepted;
+  };
+  observedLinks = unique(data.links, 100); observedImages = unique(data.images, 60);
+  return { links: observedLinks, images: observedImages };
+}
 async function screenshot() {
   const { stdout } = await exec('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-f', 'x11grab',
     '-video_size', '1280x720', '-i', ':99', '-frames:v', '1', '-threads', '1', '-filter_threads', '1', '-f', 'image2pipe', '-vcodec', 'png', 'pipe:1'],
@@ -94,6 +127,14 @@ export async function action(input) {
     if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.href.length > 4096)
       throw new Error('Only public web URLs are permitted');
     await cdp.call('Page.navigate', { url: url.href });
+  } else if (input.action === 'search') {
+    if (typeof input.query !== 'string' || !input.query.trim() || input.query.length > 1000) throw new Error('Invalid query');
+    await cdp.call('Page.navigate', { url: `https://www.bing.com/${input.images ? 'images/search' : 'search'}?q=${encodeURIComponent(input.query)}` });
+  } else if (input.action === 'open_link') {
+    const history = await cdp.call('Page.getNavigationHistory');
+    if (history.entries[history.currentIndex]?.url !== observedURL || !Number.isInteger(input.id) || !observedLinks[input.id])
+      throw new Error('Stale or invalid link');
+    await cdp.call('Page.navigate', { url: observedLinks[input.id].url });
   } else if (input.action === 'click') {
     await exec('xdotool', ['mousemove', number(input.x, 1279), number(input.y, 719), 'click', '1']);
   } else if (input.action === 'type') {
@@ -134,16 +175,26 @@ const server = http.createServer(async (req, res) => {
       const tree = await cdp.call('Accessibility.getFullAXTree');
       const history = await cdp.call('Page.getNavigationHistory');
       const page = history.entries[history.currentIndex];
+      observedURL = page?.url;
+      const items = await observation();
       const nodes = tree.nodes.filter((node) => !node.ignored && node.name?.value)
         .slice(0, 200).map((node) => ({ role: node.role?.value, name: String(node.name.value).slice(0, 500) }));
-      res.end(JSON.stringify({ url: page?.url, title: page?.title, nodes })); return;
+      res.end(JSON.stringify({ url: page?.url, title: page?.title, nodes, ...items })); return;
     }
-    if (req.url === '/action' && req.method === 'POST') {
+    if (['/action', '/image'].includes(req.url) && req.method === 'POST') {
       let text = '';
       for await (const chunk of req) {
         text += chunk.toString(); if (text.length > 8192) throw new Error('Action too large');
       }
-      res.end(JSON.stringify(await action(JSON.parse(text)))); return;
+      const input = JSON.parse(text);
+      if (req.url === '/image') {
+        const history = await cdp.call('Page.getNavigationHistory');
+        if (history.entries[history.currentIndex]?.url !== observedURL || !Number.isInteger(input.id) || !observedImages[input.id])
+          throw new Error('Stale or invalid image');
+        const image = await downloadPublicImage(observedImages[input.id].url);
+        res.writeHead(200, { 'content-type': image.mime, 'cache-control': 'no-store' }); res.end(image.data); return;
+      }
+      res.end(JSON.stringify(await action(input))); return;
     }
     res.writeHead(404); res.end();
   } catch { res.writeHead(503); res.end(JSON.stringify({ error: 'Workspace operation failed' })); }

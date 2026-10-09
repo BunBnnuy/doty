@@ -32,6 +32,7 @@ import { registerScheduleRoutes } from './routes/schedules.js';
 import type { AgentRunner } from './agent/runner.js';
 import type { AgentImage } from './provider/types.js';
 import { BrowserWorker, BrowserWorkspace } from './browser/workspace.js';
+import { BROWSER_REPLY_INSTRUCTION, browserOwner, canUseDiscordBrowser, parseBrowserRequest, startDiscordBrowser } from './integrations/browser-discord.js';
 
 const PORT = Number.parseInt(process.env.PORT ?? '8787', 10);
 const HOST = process.env.HOST ?? '0.0.0.0';
@@ -119,6 +120,14 @@ async function main(): Promise<void> {
     // desktop client share one OpenCode history. Same comma-separated format as
     // DISCORD_ALLOWED_USER_IDS.
     const sharedSessionUserIds = parseAllowedUserIds(process.env.DOTY_SHARED_SESSION_USER_IDS);
+    const browserOwnerId = browserOwner(process.env);
+    const browserEnabled = (context: import('./integrations/discord.js').DiscordMessageContext): boolean =>
+      !!browser && !!process.env.DOTY_TOKEN?.trim() && canUseDiscordBrowser(context, browserOwnerId);
+    const startBrowser = (task: string, context: import('./integrations/discord.js').DiscordMessageContext): string => {
+      if (!browser || !discord || !browserEnabled(context)) return 'Browser tasks are available only in the owner DM.';
+      try { return startDiscordBrowser(task, context, browser, (channelId, reply) => discord!.send(channelId, reply), message => app.log.warn(message)); }
+      catch { return 'The browser is busy or its AI is unavailable. Use the browser page to take control.'; }
+    };
     const imageGenerator = new CodexImageGenerator();
     const commandModel = process.env.COMMAND_MODEL?.trim() || process.env.OPENAI_MODEL?.trim();
     const classifier: ClassifierConfig | undefined = commandModel && process.env.OPENAI_BASE_URL?.trim()
@@ -171,14 +180,7 @@ async function main(): Promise<void> {
       onCommand: async (text, context) => {
         const browserCommand = text.match(/^!?browser\s+([\s\S]+)$/i);
         if (browserCommand) {
-          const owner = process.env.DOTY_DISCORD_USER_ID?.trim()
-            || (sharedSessionUserIds.size === 1 ? [...sharedSessionUserIds][0] : allowed.size === 1 ? [...allowed][0] : undefined);
-          if (context.guildId || !owner || context.userId !== owner) return 'Browser tasks are available only in the owner DM.';
-          if (!browser || !process.env.DOTY_TOKEN?.trim()) return 'The private browser is not configured.';
-          try {
-            browser.start(browserCommand[1]!);
-            return 'Browser task started. View the result and approve actions at https://doty.killbunny.top/browser. Use your Doty API token.';
-          } catch { return 'The browser is busy or its AI is unavailable. Use the browser page to take control.'; }
+          return startBrowser(browserCommand[1]!, context);
         }
         const reminderReply = reminders
           ? handleReminderMessage(text, {
@@ -228,7 +230,10 @@ async function main(): Promise<void> {
         const key = resolveConversationKey(context, sharedSessionUserIds, DESKTOP_SESSION_KEY);
         eventLog.append({ type: 'message', data: { text } });
         const images = await loadDiscordImages(context.attachments, (message) => app.log.info(message));
-        const result = await runtime.run(`${IMAGE_REPLY_INSTRUCTION}\n\nUser message:\n${text}`, key, images);
+        const browserInstruction = browserEnabled(context) ? `\n${BROWSER_REPLY_INSTRUCTION}` : '';
+        const result = await runtime.run(`${IMAGE_REPLY_INSTRUCTION}${browserInstruction}\n\nUser message:\n${text}`, key, images);
+        const browserRequest = result.status === 'completed' && result.answer ? parseBrowserRequest(result.answer) : undefined;
+        if (browserRequest) return startBrowser(browserRequest, context);
         const imageRequest = result.status === 'completed' && result.answer
           ? parseImageRequest(result.answer) : undefined;
         if (imageRequest) {

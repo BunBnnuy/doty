@@ -8,25 +8,32 @@ tool. All input commands use fixed executable names and argument arrays.
 ## Use
 
 Open https://doty.killbunny.top/browser and enter the existing Doty API token.
-Use **Run task**, or send `!browser <task>` in the owner's Discord DM. The owner
+Use **Run task**, send a normal web-search request in the owner's Discord DM,
+or use `!browser <task>`. The owner
 is DOTY_DISCORD_USER_ID, else a single shared-session user, else a single allowed
 user. Server channels cannot access the browser.
 
 Doty uses a separate OpenCode planning session with all tool permissions denied.
 It sees a desktop screenshot and page accessibility text. It can navigate and
-read automatically. Every click, key press, and typing action needs approval in
+read, search, and open observed public links automatically. Every generic click, key press, and typing action needs approval in
 the browser page. Review the visible page and pending action before approval.
 **Take control / Stop AI** cancels the task and enables manual input. An action
 already sent to the worker can finish. Start a new task to return control to Doty.
-Enter passwords only in human mode. Task results stay on this private page;
-they are not published in the shared Doty event stream or Discord servers.
+Enter passwords only in human mode. DM tasks send their final answers and
+requested existing images back to the original owner DM. Tasks started on the
+private page keep their results there. Browser page contents and screenshots
+are not published in the shared Doty event stream or Discord servers.
 
 The UI holds the API token in memory only. Browser cookies persist in the named
 Docker volume `doty-browser-profile`. The volume also contains browser cache and
 history; treat it as private data. Screenshots and accessibility text are sent to
 the configured model provider during AI tasks and stored in OpenCode history.
 The first version has one workspace, one job, 20 actions and a 10-minute job limit.
-It has no file transfer or general desktop application tools.
+It can download observed public PNG, JPEG, GIF and WebP images up to 10 MiB
+through the checked egress proxy, including checked redirects. Image candidates
+come from the current DOM and Bing image-result metadata, never invented model
+URLs. Image search uses Bing. Private-site downloads and uploads are not supported.
+It has no general desktop application tools.
 
 ## Deployment
 
