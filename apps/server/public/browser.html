@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Doty browser</title>
+<style>body{margin:24px auto;padding:0 16px;max-width:1100px;background:#12131b;color:#eee;font:16px system-ui}input,button,textarea{font:inherit;padding:10px;border-radius:6px;border:1px solid #555;background:#222532;color:#fff}button{cursor:pointer}button:disabled{opacity:.4}input,textarea{flex:1;min-width:0}section{display:flex;gap:8px;margin:14px 0;flex-wrap:wrap}img{width:100%;background:#222;aspect-ratio:16/9;object-fit:contain;cursor:crosshair}pre{white-space:pre-wrap;overflow-wrap:anywhere}small{color:#b9bac9}</style>
+<h1>Doty browser</h1><p>A private Chromium desktop. Sign in here with your Doty API token.</p>
+<section><input id="token" type="password" autocomplete="off" placeholder="Doty API token" aria-label="Doty API token"><button id="connect">Connect</button><button id="disconnect">Disconnect</button></section>
+<small>The token stays in this page's memory. Close the page to remove it. Page images and text can be sent to the configured AI provider during an AI task. Use Take control before you enter a password.</small>
+<section><button id="control">Take control / Stop AI</button><button id="approve" disabled>Approve next action</button><span id="status">Disconnected</span></section>
+<pre id="pending"></pre><img id="screen" alt="Private browser desktop">
+<section><input id="url" placeholder="https://example.com" aria-label="Website URL"><button id="navigate">Open</button></section>
+<section><input id="text" autocomplete="off" placeholder="Text to type into the selected field" aria-label="Text to type"><button id="type">Type</button><select id="key" aria-label="Key"><option>Return</option><option>Tab</option><option>Escape</option><option>BackSpace</option><option>ctrl+a</option><option>Page_Down</option></select><button id="press">Press key</button><button id="up">Scroll up</button><button id="down">Scroll down</button></section>
+<section><textarea id="task" rows="2" placeholder="Ask Doty to use a website" aria-label="Browser task"></textarea><button id="run">Run task</button></section><pre id="answer"></pre>
+<script>
+const el=id=>document.getElementById(id);let token='',timer,objectURL,refreshing=false;
+async function request(path,body){const response=await fetch('/browser/'+path,{method:body?'POST':'GET',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});if(!response.ok)throw Error('Request failed ('+response.status+'). Check your token, worker, or control mode.');return response}
+async function refresh(){if(refreshing||!token)return;refreshing=true;try{const state=await(await request('status')).json();el('status').textContent=state.mode+' / '+state.status+' / '+state.steps+' steps';el('approve').disabled=!state.pending;el('pending').textContent=state.pending?'Approval needed: '+JSON.stringify(state.pending):'';el('answer').textContent=state.answer||'';const response=await request('screenshot');const next=URL.createObjectURL(await response.blob());el('screen').src=next;if(objectURL)URL.revokeObjectURL(objectURL);objectURL=next;}catch(e){el('status').textContent=e.message}finally{refreshing=false}}
+const handle=fn=>async()=>{try{await fn();await refresh()}catch(e){el('status').textContent=e.message}};
+const action=body=>request('action',body);
+el('connect').onclick=()=>{token=el('token').value;el('token').value='';clearInterval(timer);timer=setInterval(refresh,2000);void refresh()};
+el('disconnect').onclick=()=>{token='';clearInterval(timer);el('screen').removeAttribute('src');if(objectURL)URL.revokeObjectURL(objectURL);el('pending').textContent='';el('answer').textContent='';el('status').textContent='Disconnected'};
+el('control').onclick=handle(()=>request('control',{}));el('approve').onclick=handle(()=>request('approve',{}));
+el('navigate').onclick=handle(()=>action({action:'navigate',url:el('url').value}));
+el('type').onclick=handle(async()=>{const text=el('text').value;el('text').value='';await action({action:'type',text})});
+el('press').onclick=handle(()=>action({action:'key',key:el('key').value}));
+el('up').onclick=handle(()=>action({action:'scroll',direction:'up'}));el('down').onclick=handle(()=>action({action:'scroll',direction:'down'}));
+el('run').onclick=handle(()=>request('run',{task:el('task').value}));
+el('screen').onclick=handleEvent;
+async function handleEvent(event){const bounds=el('screen').getBoundingClientRect();try{await action({action:'click',x:Math.min(1279,Math.floor((event.clientX-bounds.left)*1280/bounds.width)),y:Math.min(719,Math.floor((event.clientY-bounds.top)*720/bounds.height))});await refresh()}catch(e){el('status').textContent=e.message}}
+</script></html>

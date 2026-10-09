@@ -21,6 +21,11 @@ fi
 
 npm run build:contracts
 
+# The browser is provisioned from versioned code; there are no manual kb edits.
+if ! git diff --quiet "$BEFORE" "$AFTER" -- apps/server/browser-worker apps/server/scripts/provision-browser.sh; then
+  bash apps/server/scripts/provision-browser.sh
+fi
+
 sudo -n systemctl restart doty-server
 sleep 5
 echo "doty-server=$(systemctl is-active doty-server)"

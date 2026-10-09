@@ -18,6 +18,8 @@ import { registerIntegrationRoutes, type IntegrationRoutesService } from './rout
 import { AgentRuntime, type AgentRuntimeOptions } from './agent/runtime.js';
 import type { AgentRunner } from './agent/runner.js';
 import { createHash, timingSafeEqual } from 'node:crypto';
+import { registerBrowserRoutes } from './routes/browser.js';
+import type { BrowserWorkspace } from './browser/workspace.js';
 
 export interface BuildAppOptions {
   /** Inject a log; defaults to in-memory. The entrypoint selects Postgres from DATABASE_URL. */
@@ -32,6 +34,7 @@ export interface BuildAppOptions {
   token?: string;
   /** Opt-in email integrations (Gmail / Microsoft 365) — routes only, no auth logic. */
   email?: IntegrationRoutesService;
+  browser?: BrowserWorkspace;
 }
 
 export interface BuiltApp {
@@ -79,6 +82,7 @@ export function buildApp(options: BuildAppOptions = {}): BuiltApp {
 
   registerHealthRoutes(app);
   registerLandingRoutes(app);
+  registerBrowserRoutes(app, options.browser, token);
   registerEventRoutes(app, log);
   registerHarnessRoutes(app, log);
   if (options.email) registerIntegrationRoutes(app, options.email, log);

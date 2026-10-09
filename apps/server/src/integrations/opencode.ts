@@ -28,6 +28,8 @@ export interface OpenCodeConfig {
   agent?: string;
   /** Abort a prompt that has not returned after this many ms (0 disables). */
   timeoutMs?: number;
+  /** Browser planning sessions cannot use host tools or MCP connections. */
+  restricted?: boolean;
 }
 
 /** Interactive tools that wait for a human; disabled on headless runs. */
@@ -93,7 +95,7 @@ export class OpenCodeClient {
       body: JSON.stringify({
         ...(title ? { title } : {}),
         model: { id: this.config.modelID, providerID: this.config.providerID },
-        permission: [{ permission: '*', pattern: '*', action: 'allow' }],
+        permission: [{ permission: '*', pattern: '*', action: this.config.restricted ? 'deny' : 'allow' }],
       }),
     });
     if (!response.ok) throw new Error(`OpenCode session HTTP ${response.status}`);
@@ -138,7 +140,10 @@ export class OpenCodeClient {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           parts: promptParts(text, images),
-          tools: HEADLESS_TOOLS,
+          ...(this.config.restricted ? { model: { providerID: this.config.providerID, modelID: this.config.modelID } } : {}),
+          tools: this.config.restricted ? { '*': false, question: false, bash: false, read: false,
+            write: false, edit: false, glob: false, grep: false, task: false, webfetch: false,
+            websearch: false, todowrite: false } : HEADLESS_TOOLS,
           ...(this.config.agent ? { agent: this.config.agent } : {}),
         }),
         signal: controller.signal,

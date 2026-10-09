@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Called by the versioned deploy script on kb. Never run through ad-hoc SSH.
+set -euo pipefail
+cd /home/ubuntu/doty
+if ! command -v docker >/dev/null; then
+  sudo -n apt-get update -qq
+  sudo -n apt-get install -y ca-certificates curl
+  sudo -n install -m 0755 -d /etc/apt/keyrings
+  curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo -n tee /etc/apt/keyrings/docker.asc >/dev/null
+  sudo -n chmod a+r /etc/apt/keyrings/docker.asc
+  . /etc/os-release
+  printf 'Types: deb\nURIs: https://download.docker.com/linux/ubuntu\nSuites: %s\nComponents: stable\nArchitectures: %s\nSigned-By: /etc/apt/keyrings/docker.asc\n' "$VERSION_CODENAME" "$(dpkg --print-architecture)" |
+    sudo -n tee /etc/apt/sources.list.d/docker.sources >/dev/null
+  sudo -n apt-get update -qq
+  sudo -n apt-get install -y docker-ce docker-ce-cli containerd.io
+fi
+sudo -n systemctl enable --now docker
+# Generate credentials only on first setup. They never enter deploy logs or the repo.
+sudo -n install -d -m 0700 /etc/doty-browser
+if ! sudo -n test -f /etc/doty-browser/worker.env; then
+  sudo -n sh -c 'umask 077; printf "BROWSER_WORKER_TOKEN=%s\n" "$(openssl rand -hex 32)" > /etc/doty-browser/worker.env'
+fi
+sudo -n install -d /etc/systemd/system/doty-server.service.d
+printf '[Service]\nEnvironmentFile=/etc/doty-browser/worker.env\n' |
+  sudo -n tee /etc/systemd/system/doty-server.service.d/browser.conf >/dev/null
+sudo -n systemctl daemon-reload
+
+REVISION=$(git rev-parse HEAD)
+IMAGE="doty-browser:${REVISION:0:12}"
+sudo -n docker build -t "$IMAGE" apps/server/browser-worker
+sudo -n docker network inspect doty-browser-private >/dev/null 2>&1 || sudo -n docker network create --internal doty-browser-private >/dev/null
+sudo -n docker network inspect doty-browser-egress >/dev/null 2>&1 || sudo -n docker network create doty-browser-egress >/dev/null
+sudo -n docker volume inspect doty-browser-profile >/dev/null 2>&1 || sudo -n docker volume create doty-browser-profile >/dev/null
+# Block the server's own public addresses too; the private ranges are always blocked.
+BLOCKED_IPS=$(hostname -I | tr ' ' ',' | sed 's/,$//')
+for CONTAINER in doty-browser doty-browser-egress; do
+  if sudo -n docker container inspect "$CONTAINER" >/dev/null 2>&1; then sudo -n docker rm -f "$CONTAINER" >/dev/null; fi
+done
+sudo -n docker run -d --name doty-browser-egress --restart unless-stopped \
+  --network doty-browser-private --network-alias egress --read-only --cap-drop ALL \
+  --security-opt no-new-privileges --memory 128m --cpus 0.25 --pids-limit 64 \
+  --log-opt max-size=5m --log-opt max-file=2 -e "BLOCKED_IPS=$BLOCKED_IPS" "$IMAGE" node egress.mjs >/dev/null
+sudo -n docker network connect doty-browser-egress doty-browser-egress
+sudo -n docker run -d --name doty-browser --restart unless-stopped \
+  --network doty-browser-private -p 127.0.0.1:8890:8890 --read-only --cap-drop ALL \
+  --security-opt no-new-privileges --security-opt "seccomp=$PWD/apps/server/browser-worker/seccomp.json" \
+  --memory 1536m --cpus 2 --pids-limit 256 --shm-size 128m \
+  --tmpfs /tmp:rw,nosuid,nodev,size=128m --tmpfs /home/browser/.cache:rw,nosuid,nodev,size=64m,uid=1001,gid=1001 \
+  --tmpfs /home/browser/.config:rw,nosuid,nodev,size=16m,uid=1001,gid=1001 \
+  --mount type=volume,src=doty-browser-profile,dst=/home/browser/profile \
+  --env-file /etc/doty-browser/worker.env --log-opt max-size=5m --log-opt max-file=2 "$IMAGE" >/dev/null
+# Test from the host with the runtime credential; never print it.
+sudo -n sh -c 'set -a; . /etc/doty-browser/worker.env; set +a; exec node apps/server/browser-worker/smoke.mjs'
+echo 'browser workspace ready (2 CPUs / 1536 MiB limit; proxy 128 MiB)'

@@ -31,6 +31,7 @@ import { createEmailServiceFromEnv } from './integrations/email/service.js';
 import { registerScheduleRoutes } from './routes/schedules.js';
 import type { AgentRunner } from './agent/runner.js';
 import type { AgentImage } from './provider/types.js';
+import { BrowserWorker, BrowserWorkspace } from './browser/workspace.js';
 
 const PORT = Number.parseInt(process.env.PORT ?? '8787', 10);
 const HOST = process.env.HOST ?? '0.0.0.0';
@@ -74,6 +75,14 @@ async function main(): Promise<void> {
   // Optional email integrations (Gmail / Microsoft 365). Enabled when Postgres
   // and DOTY_CRED_KEY exist; each provider additionally needs its OAuth app env.
   const email = createEmailServiceFromEnv();
+  const browserToken = process.env.BROWSER_WORKER_TOKEN?.trim();
+  const browserModel = parseOpenCodeModel(process.env.BROWSER_MODEL?.trim() || process.env.OPENCODE_MODEL?.trim() || 'opencode-go/deepseek-v4.1-flash');
+  const browserOpenAI = browserModel.providerID === 'openai' || /^(gpt-|codex|o\d)/i.test(browserModel.modelID);
+  // The planner has no host tools. It returns actions for the private workspace.
+  const browser = browserToken ? new BrowserWorkspace(
+    new BrowserWorker(process.env.BROWSER_WORKER_URL?.trim() || 'http://127.0.0.1:8890', browserToken),
+    opencodeUrl && !browserOpenAI ? new OpenCodeClient({ baseUrl: opencodeUrl, ...browserModel, restricted: true, timeoutMs: 90_000 }) : undefined,
+  ) : undefined;
 
   const { app, runtime } = buildApp({
     logger: true,
@@ -81,6 +90,7 @@ async function main(): Promise<void> {
     ...(runner ? { runner } : {}),
     ...(agent ? { agent } : {}),
     ...(email ? { email } : {}),
+    ...(browser ? { browser } : {}),
   });
 
   if (!process.env.DOTY_TOKEN?.trim()) {
@@ -159,6 +169,17 @@ async function main(): Promise<void> {
       onVoiceStateUpdate: (data) => voice?.onVoiceStateUpdate(data),
       onVoiceServerUpdate: (data) => voice?.onVoiceServerUpdate(data),
       onCommand: async (text, context) => {
+        const browserCommand = text.match(/^!?browser\s+([\s\S]+)$/i);
+        if (browserCommand) {
+          const owner = process.env.DOTY_DISCORD_USER_ID?.trim()
+            || (sharedSessionUserIds.size === 1 ? [...sharedSessionUserIds][0] : allowed.size === 1 ? [...allowed][0] : undefined);
+          if (context.guildId || !owner || context.userId !== owner) return 'Browser tasks are available only in the owner DM.';
+          if (!browser || !process.env.DOTY_TOKEN?.trim()) return 'The private browser is not configured.';
+          try {
+            browser.start(browserCommand[1]!);
+            return 'Browser task started. View the result and approve actions at https://doty.killbunny.top/browser. Use your Doty API token.';
+          } catch { return 'The browser is busy or its AI is unavailable. Use the browser page to take control.'; }
+        }
         const reminderReply = reminders
           ? handleReminderMessage(text, {
               channelId: context.channelId,
