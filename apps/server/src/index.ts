@@ -19,9 +19,11 @@ import { OpenAIChatProvider, openAIConfigFromEnv } from './provider/openai.js';
 import { PgEventLog } from './events/pg-log.js';
 import { AgentMemory, OpenAIEmbedder, embeddingConfigFromEnv, memoryStoreFromEnv } from './memory/index.js';
 import { parseAllowedUserIds, parseTriggerWords, resolveConversationKey, startDiscordBot, type DiscordAttachment, type DiscordBot } from './integrations/discord.js';
-import { extractCommandArg, parseVoiceCommand, VoiceManager } from './integrations/voice.js';
+import { extractCommandArg, VoiceManager } from './integrations/voice.js';
 import { handleReminderMessage, ReminderService, resolveTimeZone } from './integrations/reminders.js';
-import { classifyVoiceIntent, classifyVoiceIntentJev, JEV_DEFAULT_MODEL, JEV_DEFAULT_URL, type ClassifierConfig, type JevConfig } from './integrations/command-classifier.js';
+import { JEV_DEFAULT_MODEL, JEV_DEFAULT_URL, type ClassifierConfig, type JevConfig } from './integrations/command-classifier.js';
+import { decideDiscordRoute, DIRECT_AI_INSTRUCTION, IMAGE_ROUTE_INSTRUCTION } from './integrations/discord-routing.js';
+import type { DiscordIntent } from './integrations/command-classifier.js';
 import { OpenCodeClient, parseOpenCodeModel } from './integrations/opencode.js';
 import { CodexImageGenerator, deliverImageRequest, IMAGE_REPLY_INSTRUCTION, parseImageRequest } from './integrations/codex-images.js';
 import { OpenCodeAgent, DESKTOP_SESSION_KEY } from './agent/opencode-agent.js';
@@ -32,7 +34,7 @@ import { registerScheduleRoutes } from './routes/schedules.js';
 import type { AgentRunner } from './agent/runner.js';
 import type { AgentImage } from './provider/types.js';
 import { BrowserWorker, BrowserWorkspace } from './browser/workspace.js';
-import { BROWSER_REPLY_INSTRUCTION, browserBusyReply, browserOwner, canUseDiscordBrowser, parseBrowserRequest, startDiscordBrowser } from './integrations/browser-discord.js';
+import { browserBusyReply, browserOwner, canUseDiscordBrowser, startDiscordBrowser } from './integrations/browser-discord.js';
 
 const PORT = Number.parseInt(process.env.PORT ?? '8787', 10);
 const HOST = process.env.HOST ?? '0.0.0.0';
@@ -153,7 +155,7 @@ async function main(): Promise<void> {
           ...(process.env.OPENAI_SESSION_ID?.trim() ? { sessionId: process.env.OPENAI_SESSION_ID.trim() } : {}),
         }
       : undefined;
-    app.log.info(jev ? 'jev classifier: enabled' : 'jev classifier: disabled');
+    app.log.info(jev ? 'jev Discord router: enabled (commands, AI, web, images)' : 'jev Discord router: disabled');
     voice = new VoiceManager({
       log: (message) => app.log.info(message),
       ...(process.env.PIPER_BIN?.trim() ? { piperBin: process.env.PIPER_BIN.trim() } : {}),
@@ -172,6 +174,7 @@ async function main(): Promise<void> {
       },
       logger: (message) => app.log.info(message),
     });
+    const discordRoutes = new WeakMap<object, DiscordIntent>();
     discord = startDiscordBot({
       token: discordToken,
       allowedUserIds: allowed,
@@ -194,12 +197,15 @@ async function main(): Promise<void> {
             }, reminders, { timeZone, triggerWords })
           : undefined;
         if (reminderReply !== undefined) return reminderReply;
-        let command = parseVoiceCommand(text, triggerWords);
-        if (!command && jev) command = await classifyVoiceIntentJev(text, jev);
-        if (!command && classifier && text.split(/\s+/).length <= 12) {
-          command = await classifyVoiceIntent(text, classifier);
+        const route = await decideDiscordRoute(text, { triggerWords, webAvailable: browserEnabled(context),
+          ...(jev ? { jev } : {}), ...(classifier ? { classifier } : {}) });
+        app.log.info(`discord routing: ${route.kind}`);
+        if (route.kind === 'web') return startBrowser(text, context);
+        if (route.kind !== 'command') {
+          discordRoutes.set(context, route);
+          return undefined;
         }
-        if (!command) return undefined;
+        let command = route.command;
         if ((command.cmd === 'play' || command.cmd === 'say') && !command.arg) {
           const arg = extractCommandArg(text, triggerWords);
           if (arg) command = { cmd: command.cmd, arg };
@@ -233,11 +239,11 @@ async function main(): Promise<void> {
         const key = resolveConversationKey(context, sharedSessionUserIds, DESKTOP_SESSION_KEY);
         eventLog.append({ type: 'message', data: { text } });
         const images = await loadDiscordImages(context.attachments, (message) => app.log.info(message));
-        const browserInstruction = browserEnabled(context) ? `\n${BROWSER_REPLY_INSTRUCTION}` : '';
-        const result = await runtime.run(`${IMAGE_REPLY_INSTRUCTION}${browserInstruction}\n\nUser message:\n${text}`, key, images);
-        const browserRequest = result.status === 'completed' && result.answer ? parseBrowserRequest(result.answer) : undefined;
-        if (browserRequest) return startBrowser(browserRequest, context);
-        const imageRequest = result.status === 'completed' && result.answer
+        const imageSelected = discordRoutes.get(context)?.kind === 'image';
+        discordRoutes.delete(context);
+        const instruction = imageSelected ? `${IMAGE_ROUTE_INSTRUCTION}\n${IMAGE_REPLY_INSTRUCTION}` : DIRECT_AI_INSTRUCTION;
+        const result = await runtime.run(`${instruction}\n\nUser message:\n${text}`, key, images);
+        const imageRequest = imageSelected && result.status === 'completed' && result.answer
           ? parseImageRequest(result.answer) : undefined;
         if (imageRequest) {
           try {
