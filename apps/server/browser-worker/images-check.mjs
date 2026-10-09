@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { downloadPublicImage, imageMime, publicURL } from './images.mjs';
+import { downloadPublicImage, downloadObservedImage, imageMime, publicURL } from './images.mjs';
 const png = Buffer.from('89504e470d0a1a0a', 'hex');
 test('only raster signatures and normal HTTP(S) image URLs are accepted', () => {
   assert.equal(imageMime(png), 'image/png');
@@ -26,4 +26,24 @@ test('image downloads go through the proxy, follow checked redirects, and reject
     await assert.rejects(downloadPublicImage('http://images.example/html', address));
     await assert.rejects(downloadPublicImage('http://images.example/large', address));
   } finally { await new Promise(resolve => proxy.close(resolve)); }
+});
+test('an inaccessible original falls back only to the same observed result preview', async () => {
+  const proxy = http.createServer((req, res) => {
+    if (req.url.endsWith('/original')) { res.writeHead(403); res.end(); }
+    else res.end(png);
+  });
+  await new Promise(resolve => proxy.listen(0, '127.0.0.1', resolve));
+  try {
+    const image = await downloadObservedImage({ url: 'http://images.example/original', preview: 'http://images.example/thumbnail' },
+      `http://127.0.0.1:${proxy.address().port}`);
+    assert.deepEqual(image, { data: png, mime: 'image/png', preview: true });
+    await assert.rejects(downloadObservedImage({ url: 'http://images.example/original', preview: 'file:///etc/passwd' },
+      `http://127.0.0.1:${proxy.address().port}`));
+  } finally { await new Promise(resolve => proxy.close(resolve)); }
+});
+test('observed embedded previews accept only bounded raster bytes', async () => {
+  assert.deepEqual(await downloadObservedImage({ url: `data:image/png;base64,${png.toString('base64')}` }),
+    { data: png, mime: 'image/png', preview: true });
+  for (const url of ['data:image/svg+xml;base64,PHN2Zy8+', 'data:image/png;base64,PHN2Zy8+',
+    `data:image/png;base64,${'A'.repeat(700_000)}`]) await assert.rejects(downloadObservedImage({ url }));
 });

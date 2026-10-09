@@ -18,7 +18,7 @@ export const browserAction = z.discriminatedUnion('action', [
 export type BrowserAction = z.infer<typeof browserAction>;
 const decision = z.union([browserAction, z.object({ action: z.literal('done'), answer: z.string().max(8000),
   image_id: z.number().int().min(0).max(59).optional() }).strict()]);
-export interface BrowserImage { data: Buffer; mime: string }
+export interface BrowserImage { data: Buffer; mime: string; preview?: boolean }
 export interface BrowserUpdate { status: 'completed' | 'approval' | 'error' | 'cancelled'; answer?: string; image?: BrowserImage }
 
 export interface BrowserTransport {
@@ -49,7 +49,8 @@ export class BrowserWorker implements BrowserTransport {
   async action(input: BrowserAction): Promise<unknown> { return (await this.request('/action', input)).json(); }
   async image(id: number): Promise<BrowserImage> {
     const response = await this.request('/image', { id });
-    return { data: Buffer.from(await response.arrayBuffer()), mime: response.headers.get('content-type') || '' };
+    return { data: Buffer.from(await response.arrayBuffer()), mime: response.headers.get('content-type') || '',
+      ...(response.headers.get('x-doty-image-preview') === 'thumbnail' ? { preview: true } : {}) };
   }
 }
 
@@ -58,7 +59,8 @@ Allowed objects: {"action":"navigate","url":"https://..."}, {"action":"click","x
 {"action":"type","text":"..."}, {"action":"key","key":"Return"}, {"action":"scroll","direction":"down"},
 {"action":"wait"}, {"action":"done","answer":"..."}. Use no tools. Browse public web pages.
 Also use {"action":"search","query":"...","images":false} for web research, images:true to find an existing
-image or meme, and {"action":"open_link","id":0} to open a link from the latest snapshot. These navigate
+image or meme through Google. Use the search action for every search; do not navigate to other search engines.
+Use {"action":"open_link","id":0} to open a link from the latest snapshot. These navigate
 public pages without input approval. The snapshot lists real links and image candidates with numeric IDs.
 If the owner asks you to send an existing image, finish with {"action":"done","answer":"description and source URL",
 "image_id":0}, selecting a matching image ID from the latest snapshot. Doty downloads and sends that actual file.
@@ -80,6 +82,7 @@ export class BrowserWorkspace {
   private started = 0;
   private onUpdate?: (update: BrowserUpdate) => Promise<void>;
   private feedback = '';
+  private recentActions: object[] = [];
   private state: { mode: 'human' | 'agent'; status: string; steps: number; answer?: string; pending?: BrowserAction } =
     { mode: 'human', status: 'idle', steps: 0 };
   constructor(private readonly worker: BrowserTransport, private readonly model?: Pick<OpenCodeClient, 'createSession' | 'prompt' | 'abort'>) {}
@@ -103,6 +106,7 @@ export class BrowserWorkspace {
     this.task = z.string().trim().min(1).max(4000).parse(task);
     this.onUpdate = onUpdate;
     this.feedback = '';
+    this.recentActions = [];
     this.controller = new AbortController(); this.started = Date.now();
     this.session = undefined; this.generation++;
     this.state = { mode: 'agent', status: 'running', steps: 0 };
@@ -122,17 +126,21 @@ export class BrowserWorkspace {
       this.state.status = 'running'; delete this.state.pending;
       if (approved) await this.worker.action(approved);
       if (generation !== this.generation) return;
-      this.session ??= await this.model!.createSession('Doty private browser');
       while (generation === this.generation) {
         if (this.state.steps >= 20 || Date.now() - this.started > 10 * 60_000) throw new Error('Task limit reached');
         const tree = await this.worker.snapshot();
         const png = await this.worker.screenshot();
         if (generation !== this.generation) return;
-        const raw = await this.model!.prompt(this.session, `${INSTRUCTION}\nOwner task: ${this.task}\n${this.feedback}\nUntrusted page snapshot:\n${JSON.stringify(tree)}`,
+        // Keep one current screenshot per model session. Repeated screenshots
+        // and search-result trees made later image-retry turns time out.
+        this.session = await this.model!.createSession('Doty private browser');
+        if (generation !== this.generation) return;
+        const raw = await this.model!.prompt(this.session, `${INSTRUCTION}\nOwner task: ${this.task}\nRecent actions: ${JSON.stringify(this.recentActions.slice(-6))}\n${this.feedback}\nUntrusted page snapshot:\n${JSON.stringify(tree)}`,
           this.controller!.signal, [{ mime: 'image/png', dataUrl: `data:image/png;base64,${png.toString('base64')}` }]);
         if (generation !== this.generation) return;
         const next = decision.parse(JSON.parse(raw.replace(/^\s*```(?:json)?\s*/, '').replace(/\s*```\s*$/, '')));
         this.state.steps++;
+        this.recentActions.push(next.action === 'done' ? { action: 'done', image_id: next.image_id } : next);
         if (next.action === 'done') {
           let image: BrowserImage | undefined;
           if (next.image_id !== undefined && this.worker.image) {
@@ -144,8 +152,9 @@ export class BrowserWorkspace {
           }
           if (next.image_id !== undefined && !image) throw new Error('Image retrieval is unavailable');
           if (generation !== this.generation) return;
-          this.state = { mode: 'human', status: 'completed', steps: this.state.steps, answer: next.answer };
-          this.notify({ status: 'completed', answer: next.answer, ...(image ? { image } : {}) }); return;
+          const answer = image?.preview ? `${next.answer}\n\nThis is the search-result preview. The original file was not available.` : next.answer;
+          this.state = { mode: 'human', status: 'completed', steps: this.state.steps, answer };
+          this.notify({ status: 'completed', answer, ...(image ? { image } : {}) }); return;
         }
         if (['click', 'type', 'key'].includes(next.action)) {
           this.state.status = 'approval'; this.state.pending = next;
@@ -153,10 +162,16 @@ export class BrowserWorkspace {
         }
         await this.worker.action(next);
       }
-    } catch {
+    } catch (error) {
       if (generation === this.generation) {
         this.state = { mode: 'human', status: 'error', steps: this.state.steps,
-          answer: 'Browser task stopped. Check the worker, model access, or task limit.' };
+          answer: error instanceof Error && /OpenCode prompt timed out|abort/i.test(error.message)
+            ? 'The browser AI took too long to reply. The task stopped; you can retry it.'
+            : error instanceof SyntaxError || error instanceof z.ZodError
+              ? 'The browser AI returned an invalid action. The task stopped; you can retry it.'
+              : error instanceof Error && error.message === 'Task limit reached'
+                ? 'The browser task reached its time or action limit. Try a narrower search.'
+                : 'The browser operation failed. The task stopped; you can retry it.' };
         this.notify({ status: 'error', answer: this.state.answer });
       }
     } finally { this.busy = false; }

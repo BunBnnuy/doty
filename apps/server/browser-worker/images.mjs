@@ -15,6 +15,12 @@ export function publicURL(raw) {
     (url.port && url.port !== (url.protocol === 'https:' ? '443' : '80'))) throw new Error('Unsupported image URL');
   return url;
 }
+export function inlineImage(raw) {
+  if (typeof raw !== 'string' || raw.length > 700_000 || !/^data:image\/(png|jpeg|gif|webp);base64,[A-Za-z0-9+/=]+$/.test(raw))
+    throw new Error('Unsupported embedded image');
+  const data = Buffer.from(raw.slice(raw.indexOf(',') + 1), 'base64');
+  return { data, mime: imageMime(data), preview: true };
+}
 async function tunnel(url, proxy, timeout) {
   return new Promise((resolve, reject) => {
     const request = http.request({ host: proxy.hostname, port: proxy.port, method: 'CONNECT', path: `${url.hostname}:443`, timeout });
@@ -27,9 +33,9 @@ async function tunnel(url, proxy, timeout) {
     request.on('error', reject); request.end();
   });
 }
-export async function downloadPublicImage(raw, proxyURL = 'http://egress:8080') {
+export async function downloadPublicImage(raw, proxyURL = 'http://egress:8080', timeoutMs = 12_000) {
   const proxy = new URL(proxyURL);
-  const deadline = Date.now() + 12_000;
+  const deadline = Date.now() + timeoutMs;
   let url = publicURL(raw);
   for (let redirects = 0; redirects <= 3; redirects++) {
     let agent;
@@ -68,4 +74,15 @@ export async function downloadPublicImage(raw, proxyURL = 'http://egress:8080') 
     } finally { agent?.destroy(); }
   }
   throw new Error('Image redirect limit');
+}
+
+/** A search thumbnail is the same observed result, not a model-generated substitute. */
+export async function downloadObservedImage(candidate, proxyURL = 'http://egress:8080') {
+  if (candidate.url?.startsWith('data:')) return inlineImage(candidate.url);
+  try { return await downloadPublicImage(candidate.url, proxyURL, 5000); }
+  catch (error) {
+    if (!candidate.preview || candidate.preview === candidate.url) throw error;
+    return candidate.preview.startsWith('data:') ? inlineImage(candidate.preview)
+      : { ...await downloadPublicImage(candidate.preview, proxyURL, 7500), preview: true };
+  }
 }

@@ -1,11 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
 import { BrowserWorkspace } from '../browser/workspace.js';
-import { browserOwner, canUseDiscordBrowser, parseBrowserRequest, startDiscordBrowser } from './browser-discord.js';
+import { browserBusyReply, browserOwner, canUseDiscordBrowser, parseBrowserRequest, startDiscordBrowser } from './browser-discord.js';
 import type { DiscordMessageContext } from './discord.js';
 
 const context: DiscordMessageContext = { userId: 'owner', channelId: 'original-dm', messageId: 'request', isDm: true,
   conversationKey: 'dm:owner', attachments: [] };
 describe('Discord browser requests', () => {
+  it('reports an active task separately from missing AI configuration', () => {
+    expect(browserBusyReply({ status: () => ({ ai: true, mode: 'agent', status: 'running', steps: 2 }) })).toContain('still running (2 actions)');
+    expect(browserBusyReply({ status: () => ({ ai: true, mode: 'agent', status: 'approval', steps: 2 }) })).toContain('waiting for input approval');
+    expect(browserBusyReply({ status: () => ({ ai: false, mode: 'human', status: 'idle', steps: 0 }) })).toContain('AI is unavailable');
+  });
   it('parses natural-language routing markers without accepting extra fields or empty tasks', () => {
     expect(parseBrowserRequest('```json\n{"doty_browser_request":{"task":"Find the existing Gold Ship meme and send it"}}\n```'))
       .toBe('Find the existing Gold Ship meme and send it');
@@ -68,7 +73,20 @@ describe('Discord browser requests', () => {
     startDiscordBrowser('Find a meme', context, browser, send, vi.fn());
     await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
     expect(retrieve.mock.calls).toEqual([[0], [1]]);
+    expect(model.createSession).toHaveBeenCalledTimes(2);
     expect(model.prompt.mock.calls[1]?.[1]).toContain('could not be downloaded');
     expect(send).toHaveBeenCalledWith('original-dm', expect.objectContaining({ content: 'Second public source' }));
+  });
+  it('labels a search-result thumbnail and still sends the existing image file', async () => {
+    const image = { data: Buffer.from('89504e470d0a1a0a', 'hex'), mime: 'image/png', preview: true };
+    const browser = new BrowserWorkspace({ health: vi.fn(), screenshot: vi.fn(async () => Buffer.from('screen')),
+      snapshot: vi.fn(async () => ({})), action: vi.fn(), image: vi.fn(async () => image) }, {
+      createSession: vi.fn(async () => 's'), abort: vi.fn(async () => {}),
+      prompt: vi.fn(async () => '{"action":"done","answer":"Matching meme from X","image_id":0}') });
+    const send = vi.fn(async () => {});
+    startDiscordBrowser('Find the meme', context, browser, send, vi.fn());
+    await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+    expect(send).toHaveBeenCalledWith('original-dm', expect.objectContaining({
+      content: expect.stringContaining('search-result preview'), files: [expect.objectContaining({ data: image.data })] }));
   });
 });

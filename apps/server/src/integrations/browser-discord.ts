@@ -30,6 +30,13 @@ export function browserOwner(env: NodeJS.ProcessEnv): string | undefined {
 export function canUseDiscordBrowser(context: Pick<DiscordMessageContext, 'isDm' | 'guildId' | 'userId'>, owner: string | undefined): boolean {
   return !!owner && context.isDm && !context.guildId && context.userId === owner;
 }
+export function browserBusyReply(browser: Pick<BrowserWorkspace, 'status'>): string {
+  const state = browser.status() as { status: string; steps: number; mode: string; ai: boolean };
+  if (!state.ai) return 'The browser AI is unavailable. Check the browser configuration and try again.';
+  if (state.status === 'approval') return 'Your browser task is waiting for input approval at https://doty.killbunny.top/browser. I will send the result here after approval.';
+  if (state.mode === 'agent') return `Your browser task is still running (${state.steps} actions). I will send its result here when it finishes.`;
+  return 'The browser is finishing another operation. Try again shortly.';
+}
 export function startDiscordBrowser(task: string, context: DiscordMessageContext, browser: BrowserWorkspace,
   send: DiscordBot['send'], log: (message: string) => void): string {
   browser.start(task, async (update: BrowserUpdate) => {

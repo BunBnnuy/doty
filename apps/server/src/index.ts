@@ -32,7 +32,7 @@ import { registerScheduleRoutes } from './routes/schedules.js';
 import type { AgentRunner } from './agent/runner.js';
 import type { AgentImage } from './provider/types.js';
 import { BrowserWorker, BrowserWorkspace } from './browser/workspace.js';
-import { BROWSER_REPLY_INSTRUCTION, browserOwner, canUseDiscordBrowser, parseBrowserRequest, startDiscordBrowser } from './integrations/browser-discord.js';
+import { BROWSER_REPLY_INSTRUCTION, browserBusyReply, browserOwner, canUseDiscordBrowser, parseBrowserRequest, startDiscordBrowser } from './integrations/browser-discord.js';
 
 const PORT = Number.parseInt(process.env.PORT ?? '8787', 10);
 const HOST = process.env.HOST ?? '0.0.0.0';
@@ -82,7 +82,7 @@ async function main(): Promise<void> {
   // The planner has no host tools. It returns actions for the private workspace.
   const browser = browserToken ? new BrowserWorkspace(
     new BrowserWorker(process.env.BROWSER_WORKER_URL?.trim() || 'http://127.0.0.1:8890', browserToken),
-    opencodeUrl && !browserOpenAI ? new OpenCodeClient({ baseUrl: opencodeUrl, ...browserModel, restricted: true, timeoutMs: 90_000 }) : undefined,
+    opencodeUrl && !browserOpenAI ? new OpenCodeClient({ baseUrl: opencodeUrl, ...browserModel, restricted: true, timeoutMs: 180_000 }) : undefined,
   ) : undefined;
 
   const { app, runtime } = buildApp({
@@ -129,7 +129,7 @@ async function main(): Promise<void> {
     const startBrowser = (task: string, context: import('./integrations/discord.js').DiscordMessageContext): string => {
       if (!browser || !discord || !browserEnabled(context)) return 'Browser tasks are available only in the owner DM.';
       try { return startDiscordBrowser(task, context, browser, (channelId, reply) => discord!.send(channelId, reply), message => app.log.warn(message)); }
-      catch { return 'The browser is busy or its AI is unavailable. Use the browser page to take control.'; }
+      catch { return browserBusyReply(browser); }
     };
     const imageGenerator = new CodexImageGenerator();
     const commandModel = process.env.COMMAND_MODEL?.trim() || process.env.OPENAI_MODEL?.trim();

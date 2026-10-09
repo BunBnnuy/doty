@@ -13,7 +13,9 @@ or use `!browser <task>`. The owner
 is DOTY_DISCORD_USER_ID, else a single shared-session user, else a single allowed
 user. Server channels cannot access the browser.
 
-Doty uses a separate OpenCode planning session with all tool permissions denied.
+Doty uses a fresh OpenCode planning session for each step, with all tool permissions denied.
+Each step includes the current page, one screenshot and recent actions. The model
+has up to 180 seconds to reply; old screenshots do not accumulate in its context.
 It sees a desktop screenshot and page accessibility text. It can navigate and
 read, search, and open observed public links automatically. Every generic click, key press, and typing action needs approval in
 the browser page. Review the visible page and pending action before approval.
@@ -31,8 +33,13 @@ the configured model provider during AI tasks and stored in OpenCode history.
 The first version has one workspace, one job, 20 actions and a 10-minute job limit.
 It can download observed public PNG, JPEG, GIF and WebP images up to 10 MiB
 through the checked egress proxy, including checked redirects. Image candidates
-come from the current DOM and Bing image-result metadata, never invented model
-URLs. Image search uses Bing. Private-site downloads and uploads are not supported.
+come from the current DOM and Google image-result links, never invented model
+URLs. Web search, image search and the address-bar default use Google.
+Embedded raster previews from the current page are also accepted with size and
+file-signature checks. Private-site downloads and uploads are not supported.
+If an original image fails, Doty tries the same result's observed public thumbnail
+and labels it as a search-result preview. A second DM request reports when the
+current task is still running or waiting for approval.
 It has no general desktop application tools.
 
 ## Deployment

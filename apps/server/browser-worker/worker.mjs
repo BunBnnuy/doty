@@ -3,7 +3,7 @@ import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { unlink } from 'node:fs/promises';
-import { downloadPublicImage, publicURL } from './images.mjs';
+import { downloadObservedImage, publicURL, inlineImage } from './images.mjs';
 const token = process.env.BROWSER_WORKER_TOKEN;
 if (!token) throw new Error('Worker authentication is required');
 const exec = promisify(execFile);
@@ -85,28 +85,38 @@ async function observation() {
       const links = Array.from(document.querySelectorAll('a[href]')).slice(0, 300).map(a =>
         ({ url: a.href, title: (a.innerText || a.getAttribute('aria-label') || '').slice(0,250) }));
       const images = [];
-      for (const a of document.querySelectorAll('a.iusc[m]')) {
-        try { const m = JSON.parse(a.getAttribute('m')); images.push({url:m.murl,source:m.purl,title:(m.t || a.innerText || a.querySelector('img')?.alt || '').slice(0,250)}); } catch {}
+      for (const a of document.querySelectorAll('a[href]')) {
+        try {
+          const link = new URL(a.href), original = link.searchParams.get('imgurl');
+          if (original) images.push({url:original,preview:a.querySelector('img')?.currentSrc,
+            source:link.searchParams.get('imgrefurl') || a.href,title:(a.innerText || a.querySelector('img')?.alt || '').slice(0,250)});
+        } catch {}
       }
       for (const img of document.querySelectorAll('img')) images.push({url:img.currentSrc || img.src,
         source:img.closest('a')?.href || location.href,title:img.alt.slice(0,250)});
       return {links,images:images.slice(0,200)};
     })()` });
   const data = result.result?.value || {};
-  const unique = (items, max) => {
+  const unique = (items, max, allowInline = false) => {
     const seen = new Set(), accepted = [];
     for (const item of items || []) {
       try {
-        const url = publicURL(item.url).href;
+        const url = allowInline && typeof item.url === 'string' && item.url.startsWith('data:')
+          ? (inlineImage(item.url), item.url) : publicURL(item.url).href;
+        let preview;
+        try { if (item.preview) preview = allowInline && item.preview.startsWith('data:')
+          ? (inlineImage(item.preview), item.preview) : publicURL(item.preview).href; } catch {}
         if (seen.has(url)) continue; seen.add(url);
-        accepted.push({ ...item, url, id: accepted.length });
+        accepted.push({ url, title: item.title, source: item.source, ...(preview ? { preview } : {}), id: accepted.length });
         if (accepted.length >= max) break;
       } catch {}
     }
     return accepted;
   };
-  observedLinks = unique(data.links, 100); observedImages = unique(data.images, 60);
-  return { links: observedLinks, images: observedImages };
+  observedLinks = unique(data.links, 100); observedImages = unique(data.images, 60, true);
+  return { links: observedLinks, images: observedImages.map(item => ({ ...item,
+    url: item.url.startsWith('data:') ? 'Embedded page image' : item.url,
+    ...(item.preview?.startsWith('data:') ? { preview: 'Embedded page preview' } : {}) })) };
 }
 async function screenshot() {
   const { stdout } = await exec('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-f', 'x11grab',
@@ -129,7 +139,10 @@ export async function action(input) {
     await cdp.call('Page.navigate', { url: url.href });
   } else if (input.action === 'search') {
     if (typeof input.query !== 'string' || !input.query.trim() || input.query.length > 1000) throw new Error('Invalid query');
-    await cdp.call('Page.navigate', { url: `https://www.bing.com/${input.images ? 'images/search' : 'search'}?q=${encodeURIComponent(input.query)}` });
+    const url = new URL('https://www.google.com/search');
+    url.searchParams.set('q', input.query);
+    if (input.images) url.searchParams.set('udm', '2');
+    await cdp.call('Page.navigate', { url: url.href });
   } else if (input.action === 'open_link') {
     const history = await cdp.call('Page.getNavigationHistory');
     if (history.entries[history.currentIndex]?.url !== observedURL || !Number.isInteger(input.id) || !observedLinks[input.id])
@@ -191,8 +204,9 @@ const server = http.createServer(async (req, res) => {
         const history = await cdp.call('Page.getNavigationHistory');
         if (history.entries[history.currentIndex]?.url !== observedURL || !Number.isInteger(input.id) || !observedImages[input.id])
           throw new Error('Stale or invalid image');
-        const image = await downloadPublicImage(observedImages[input.id].url);
-        res.writeHead(200, { 'content-type': image.mime, 'cache-control': 'no-store' }); res.end(image.data); return;
+        const image = await downloadObservedImage(observedImages[input.id]);
+        res.writeHead(200, { 'content-type': image.mime, 'cache-control': 'no-store',
+          'x-doty-image-preview': image.preview ? 'thumbnail' : 'original' }); res.end(image.data); return;
       }
       res.end(JSON.stringify(await action(input))); return;
     }
